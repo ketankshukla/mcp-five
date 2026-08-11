@@ -28,7 +28,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://mcp-five.vercel.app"),
+  metadataBase: new URL("https://mcp-five-sandy.vercel.app"),
   title: {
     default: "MCP Five — five projects, one arc",
     template: "%s · MCP Five",

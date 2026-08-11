@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# env files — keep this block LAST. `.env*` also swallows `.env.example`, so if
+# one is ever added it needs a `!.env.example` negation below this line, and an
+# earlier block would be overridden by it. Test with `git add -n <file>`, not
+# `git check-ignore -v`, which reports a matching negation with exit 0 and
+# reads like a failure.
+.env*
