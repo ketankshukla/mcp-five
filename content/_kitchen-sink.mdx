@@ -1,0 +1,267 @@
+---
+title: "Kitchen sink"
+emoji: "🧪"
+summary: "Every MDX component on one page, so a change to the design system has somewhere to fail loudly."
+---
+
+This page exists so that a change to the design system breaks *here* rather
+than on page thirty of the course. It is not part of the linear walk and is
+not in the sidebar.
+
+## Prose
+
+Body text is white on black at 19px with a line height of 1.75, which is what
+makes this feel roomy rather than dense. Inline code looks like
+`classifyCall(toolName, args)` and a link looks like
+[project #3's approval gate](https://github.com/ketankshukla/learn-mcp-agent-guard).
+
+A bulleted list:
+
+- Each bullet gets a dot in the section accent.
+- **Bold** is a heavier weight, not a different colour.
+- Nested lists indent properly:
+  - like this
+  - and this
+
+And a numbered one:
+
+1. Send the conversation to the model, along with the list of tools.
+2. The model replies. Its reply either **is** the answer, or it is a request.
+3. If it is a request: run the tool, paste the result back, and go to step 1.
+
+### A third-level heading
+
+Gets a white label and an accent rule down its left side, so it reads as
+subordinate to the h2 above it without competing for colour.
+
+## Blockquote → quote callout
+
+A markdown blockquote is remapped to the quote treatment, so the "one line
+worth remembering" convention from the source READMEs survives the move:
+
+> A hint from the other side of a network boundary is not a permission model.
+
+## Callouts
+
+<Callout type="lesson">
+  The description is the **only** thing the model reads when deciding whether
+  to use your tool. Vague description, and your tool never gets called.
+</Callout>
+
+<Callout type="gotcha" title="create-next-app refuses to share a folder">
+  It will not scaffold into a directory containing any unrecognised file.
+  Scaffold to a temp dir and copy in.
+</Callout>
+
+<Callout type="warning">
+  Cost is superlinear in iterations, because each trip resends everything
+  before it. A five-step task does not cost five times a one-step task.
+</Callout>
+
+<Callout type="insight">
+  `input_tokens` is only the *uncached remainder*. The real prompt size is
+  `input + cache_creation + cache_read`.
+</Callout>
+
+## Statistics
+
+<StatGrid>
+  <Stat value="439k" label="tokens spent by one agent at 240 jars" note="finding 0 of 36" tone="danger" />
+  <Stat value="248k" label="tokens spent by a crew, same job" note="finding 36 of 36" tone="ok" />
+  <Stat value="$0.00" label="cost of a refused sampling request" note="the host refuses before calling the model" />
+  <Stat value="13/13" label="eval cases replayed from stored traces" tone="ok" />
+  <Stat value="2¢" label="default spend ceiling, per request, per server" tone="warn" />
+  <Stat value="40" label="things that actually broke across five builds" tone="muted" />
+</StatGrid>
+
+## Compare
+
+<Compare
+  leftLabel="Trusting the server's own flag"
+  rightLabel="A list the host owns"
+  left={<><p>A server you do not control ships <code>destructiveHint: false</code> on a tool that deletes everything.</p><p>Your host waves it through.</p></>}
+  right={<><p>The host checks <strong>its own</strong> list, in <code>lib/approval.ts</code>.</p><p>What the server claims is irrelevant.</p></>}
+/>
+
+## Code
+
+```ts title="lib/approval.ts" {6-9}
+export function classifyCall(toolName: string, args: unknown): GateVerdict {
+  const safeArgs: Record<string, unknown> =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? (args as Record<string, unknown>)
+      : {};
+
+  for (const rule of RULES) {
+    if (rule.tool !== toolName) continue;
+    if (rule.matches(safeArgs)) return { decision: "ask", reason: rule.reason };
+  }
+
+  return { decision: DEFAULT_DECISION };
+}
+```
+
+A block with no filename, in another language:
+
+```bash
+curl -X POST http://localhost:3000/api/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+## Terminal
+
+<Terminal title="npm run agent">
+{`--- iteration 1 --------------------------------------------------
+  -> CALL cookiejar__roll_dice  {"sides":20,"times":3}
+  <- RESULT Rolled 3d20 -> [10, 4, 16]  Total: 30  (265ms)
+
+--- iteration 2 --------------------------------------------------
+  -> CALL cookiejar__cookie_jar  {"action":"add","count":30}
+  <- RESULT Added 30. The jar now has 42 cookie(s).  (275ms)
+
+done — end_turn
+  3 iteration(s), 2 tool call(s), 697 uncached in / 287 out
+  cache: 2281 written, 4562 read at ~10% price`}
+</Terminal>
+
+## Diagrams
+
+A flowchart:
+
+<Diagram
+  title="D4 · the agent loop"
+  caption="The loop: send the conversation and the tool list to the model, append its whole reply, and if it asked for a tool, run it and go round again. The amber box is where the magic lives; everything else is bookkeeping."
+>
+{`flowchart TB
+    START(["🧑 user message"]) --> BUILD["📋 messages = [ user message ]"]
+    BUILD --> CALL["🧠 send messages + tools<br/>to the Claude API"]
+    CALL --> APPEND["📝 append the WHOLE reply<br/>to messages"]
+    APPEND --> CHECK{"stop_reason ?"}
+
+    CHECK -->|"end_turn"| DONE(["✅ that's the answer"])
+    CHECK -->|"max_tokens"| TRUNC(["✂️ cut off"])
+    CHECK -->|"tool_use"| CAP{"iteration < 10 ?"}
+
+    CAP -->|"no"| STOP(["🛑 seatbelt — stop spending"])
+    CAP -->|"yes"| RUN["🧰 run every requested tool<br/><i>in parallel</i>"]
+
+    RUN --> PASTE["📝 append ALL results as<br/>ONE user message"]
+    PASTE --> CALL
+
+    style START fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style CALL fill:#2e1065,stroke:#a78bfa,color:#ede9fe
+    style RUN fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style PASTE fill:#78350f,stroke:#fbbf24,stroke-width:3px,color:#fef3c7
+    style DONE fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style STOP fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style TRUNC fill:#450a0a,stroke:#ef4444,color:#fecaca`}
+</Diagram>
+
+And a sequence diagram, which is the other layout engine and therefore the
+other thing that can break:
+
+<Diagram
+  title="D3 · the handshake"
+  caption="Every MCP conversation: initialize, then tools/list, then — only once you actually ask for something — tools/call. The server never initiates."
+>
+{`sequenceDiagram
+    autonumber
+    actor You as 🧑 You
+    participant AI as 🧠 Claude
+    participant SRV as 🧰 Your MCP server
+
+    rect rgba(56, 189, 248, 0.15)
+        Note over AI,SRV: Handshake — happens once
+        AI->>SRV: initialize
+        SRV-->>AI: "I speak MCP, I'm cookie-jar-mcp"
+        AI->>SRV: tools/list
+        SRV-->>AI: say_hello, roll_dice, cookie_jar, secret_code
+    end
+
+    rect rgba(251, 191, 36, 0.15)
+        Note over You,SRV: Now you actually ask for something
+        You->>AI: "roll me three twenty-sided dice"
+        AI->>SRV: tools/call roll_dice { sides: 20, times: 3 }
+        Note right of SRV: YOUR JavaScript runs here.
+        SRV-->>AI: "Rolled 3d20 -> [17, 9, 18] Total: 44"
+        AI-->>You: "You rolled 17, 9 and 18 — 44 total!"
+    end`}
+</Diagram>
+
+## Steps and checkpoints
+
+<Steps>
+  <Step n={1} title="Reach the servers at all">
+    No AI involved yet. If this fails, nothing above it can work.
+
+    ```bash
+    npm run mcp:list
+    ```
+
+    <Checkpoint>
+      Three servers, eleven tools, and no authentication errors.
+    </Checkpoint>
+  </Step>
+
+  <Step n={2} title="Convert the schemas">
+    Still no AI. MCP says `inputSchema`; the Claude API says `input_schema`.
+
+    <Checkpoint>
+      Every tool converts, and the gate prints which calls it would stop.
+    </Checkpoint>
+  </Step>
+
+  <Step n={3} title="Run the loop">
+    Now it costs money.
+  </Step>
+</Steps>
+
+## A gotcha card
+
+<GotchaCard
+  n={9}
+  project={4}
+  projectName="the crew"
+  title="The headline number compared two different amounts of work"
+  symptom={<>The report said the crew cost <strong>1.7×</strong> more, so the README concluded delegation was pure overhead.</>}
+  cause={<>The ratio divided one mode&apos;s total token spend by the other&apos;s — while the two modes had run <em>different numbers of runs</em>. <code>crew-one-approval</code> is delegation-only, so a 3-attempt comparison is 3 runs in single mode and 6 in crew mode. Part of what &ldquo;1.7×&rdquo; measured was &ldquo;the crew did twice as many runs.&rdquo;</>}
+  fix={<>Track tokens per observation group and compare only the groups both modes actually executed. 1.87× became 0.84×.</>}
+  lesson={<>Any comparison between two configurations has to check that they did the <strong>same work</strong>, not just that they both ran. Every individual number on that page was right, which is exactly why it survived review.</>}
+  tags={["measurement"]}
+/>
+
+## Project cards
+
+<ProjectGrid>
+  <ProjectCard n={1} emoji="🍪" name="The Server" tagline="offers tools, waits" href="/learn/server/vending-machine" repo="https://github.com/ketankshukla/learn-mcp-5-year-old" />
+  <ProjectCard n={3} emoji="✋" name="The Gate" tagline="asks first" href="/learn/gate/hint-not-permission" repo="https://github.com/ketankshukla/learn-mcp-agent-guard" />
+  <ProjectCard n={5} emoji="💸" name="The Ledger" tagline="owns the wallet" href="/learn/ledger/four-unused" repo="https://github.com/ketankshukla/learn-mcp-agent-ledger" />
+</ProjectGrid>
+
+## Capabilities
+
+<Capability name="tools" emoji="🔧" oneLiner="A verb. The server does something, and the model decides to invoke it." introducedIn="project #1">
+  The only capability projects #1 through #4 ever used.
+</Capability>
+
+<Capability name="sampling" emoji="🧠" oneLiner="The server asks your host to run a model call. It has no API key and no model — it has yours." introducedIn="project #5" />
+
+## A table
+
+| Seatbelt | Kind of limit | What it catches that the others don't |
+|---|---|---|
+| `MAX_ITERATIONS = 10` | per agent | One agent spinning. |
+| `MAX_CONCURRENT = 3` | rate | Three-wide is a bill times three, not times sixty. |
+| `MAX_SPAWNS = 8` | quantity | An orchestrator hiring sixty workers, politely, three at a time. |
+| `MAX_TREE_TOKENS` | money | The only check that sees the whole bill. |
+| no `spawn_agent` for workers | structural | Infinite recursion. |
+
+## Glossary
+
+<Glossary>
+  <Term word="host">The thing that owns the conversation with the model, wrangles several servers, and runs the loop.</Term>
+  <Term word="sampling">A server asking the host to run a model call on the host's key.</Term>
+  <Term word="TreeBudget">One token allowance, shared by reference across an agent tree, so a ceiling on the whole run is true rather than approximately true.</Term>
+</Glossary>

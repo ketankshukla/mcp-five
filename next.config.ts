@@ -25,6 +25,17 @@ const withMDX = createMDX({
     rehypePlugins: [
       // Stable ids on every heading — the on-this-page rail reads them.
       "rehype-slug",
+      // Syntax highlighting at BUILD time, so no highlighter ships to the
+      // browser. Also gives us ```ts title="lib/approval.ts" filename chips
+      // and {1,4-6} line highlighting, straight from the fence's meta string.
+      [
+        "rehype-pretty-code",
+        {
+          theme: "github-dark-default",
+          keepBackground: false,
+          defaultLang: "text",
+        },
+      ],
     ],
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any,

@@ -2,6 +2,12 @@
    MCP Five — prose
    The typographic defaults for everything inside an MDX page. Set once, here,
    so no individual page ever styles a heading.
+
+   Every block-level selector carries `:not(.not-prose *)`. That is what makes
+   `.not-prose` work: components render their own markup inside a `.not-prose`
+   wrapper, and these rules skip anything underneath one. Without it, a <p>
+   inside a Callout would silently pick up prose margins and a <li> inside a
+   Steps list would grow an accent bullet.
    ========================================================================== */
 
 .prose {
@@ -30,7 +36,7 @@
    system: you should know which section you are in without reading a word.
    -------------------------------------------------------------------------- */
 
-.prose h1 {
+.prose h1:not(.not-prose *) {
   font-family: var(--font-display);
   font-size: clamp(2.25rem, 4.5vw, 3.5rem);
   font-weight: 700;
@@ -40,7 +46,7 @@
   text-wrap: balance;
 }
 
-.prose h2 {
+.prose h2:not(.not-prose *) {
   font-family: var(--font-display);
   font-size: clamp(1.75rem, 3vw, 2.25rem);
   font-weight: 600;
@@ -53,7 +59,7 @@
   scroll-margin-top: 6rem;
 }
 
-.prose h3 {
+.prose h3:not(.not-prose *) {
   font-family: var(--font-display);
   font-size: 1.375rem;
   font-weight: 600;
@@ -67,7 +73,7 @@
   scroll-margin-top: 6rem;
 }
 
-.prose h4 {
+.prose h4:not(.not-prose *) {
   font-family: var(--font-display);
   font-size: 1.125rem;
   font-weight: 600;
@@ -77,7 +83,6 @@
   scroll-margin-top: 6rem;
 }
 
-/* The first heading on a page shouldn't push itself away from the header. */
 .prose > :first-child {
   margin-top: 0;
 }
@@ -86,7 +91,7 @@
    Body
    -------------------------------------------------------------------------- */
 
-.prose p {
+.prose p:not(.not-prose *) {
   margin-block: 1.25rem;
 }
 
@@ -95,16 +100,13 @@
   color: var(--text);
 }
 
-.prose em {
-  font-style: italic;
-}
-
-.prose hr {
+.prose hr:not(.not-prose *) {
   border: 0;
   border-top: 1px solid var(--border);
   margin-block: 3rem;
 }
 
+/* Links keep their treatment everywhere, including inside components. */
 .prose a {
   color: var(--accent);
   text-decoration: underline;
@@ -113,36 +115,36 @@
   text-decoration-color: color-mix(in oklab, var(--accent) 45%, transparent);
 }
 
+.prose a:hover {
+  text-decoration-color: var(--accent);
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .prose a {
     transition: text-decoration-color 120ms ease-out;
   }
 }
 
-.prose a:hover {
-  text-decoration-color: var(--accent);
-}
-
 /* --------------------------------------------------------------------------
    Lists
    -------------------------------------------------------------------------- */
 
-.prose ul,
-.prose ol {
+.prose ul:not(.not-prose *),
+.prose ol:not(.not-prose *) {
   margin-block: 1.25rem;
   padding-left: 1.5rem;
 }
 
-.prose ul {
+.prose ul:not(.not-prose *) {
   list-style: none;
 }
 
-.prose ul > li {
+.prose ul:not(.not-prose *) > li {
   position: relative;
   padding-left: 0.25rem;
 }
 
-.prose ul > li::before {
+.prose ul:not(.not-prose *) > li::before {
   content: "";
   position: absolute;
   left: -1rem;
@@ -154,21 +156,16 @@
   opacity: 0.8;
 }
 
-.prose ol {
+.prose ol:not(.not-prose *) {
   list-style: decimal;
 }
 
-.prose ol > li::marker {
+.prose ol:not(.not-prose *) > li::marker {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 
-.prose li {
-  margin-block: 0.5rem;
-}
-
-.prose li > ul,
-.prose li > ol {
+.prose li:not(.not-prose *) {
   margin-block: 0.5rem;
 }
 
@@ -182,17 +179,19 @@
   line-height: 1.7;
 }
 
-/* Inline code only — a `code` that is not inside a `pre`. */
+/* Inline code — any `code` that is not inside a `pre`.
+   Deliberately NOT guarded with `:not(.not-prose *)`: inline code should look
+   identical whether it is in a paragraph or inside a Callout, and the `pre`
+   test already excludes real code blocks and terminals. */
 .prose :not(pre) > code {
   color: color-mix(in oklab, var(--accent) 90%, #ffffff);
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.1em 0.38em;
-  white-space: nowrap;
 }
 
-.prose pre {
+.prose pre:not(.not-prose *) {
   font-family: var(--font-mono);
   font-size: 0.9375rem;
   line-height: 1.7;
@@ -208,8 +207,57 @@
   background: none;
   border: 0;
   padding: 0;
-  color: var(--text);
   white-space: pre;
+}
+
+/* ---- rehype-pretty-code output -------------------------------------------
+
+   figure[data-rehype-pretty-code-figure]
+     figcaption[data-rehype-pretty-code-title]   ← the ```ts title="…" chip
+     pre > code > span[data-line]                ← one span per line
+   ------------------------------------------------------------------------- */
+
+/* Must be `figure[...]`, not the bare attribute: rehype-pretty-code puts the
+   same attribute on a <span> around every piece of INLINE code too, and a
+   bare selector would try to give inline code block-level margins. */
+figure[data-rehype-pretty-code-figure] {
+  margin-block: 1.75rem;
+}
+
+[data-rehype-pretty-code-title] {
+  display: inline-block;
+  margin-bottom: -0.6rem;
+  padding: 0.35rem 0.9rem 0.9rem;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: var(--radius-code) var(--radius-code) 0 0;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+[data-rehype-pretty-code-figure] pre {
+  position: relative;
+}
+
+[data-line] {
+  display: inline-block;
+  width: 100%;
+  padding-inline: 0.25rem;
+}
+
+/* ```ts {2,5-7} — the lines worth looking at get an accent gutter. */
+[data-highlighted-line] {
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+mark[data-highlighted-chars] {
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--accent) 22%, transparent);
+  padding: 0.1em 0.2em;
+  color: inherit;
 }
 
 /* --------------------------------------------------------------------------
@@ -243,7 +291,6 @@
   text-transform: uppercase;
   color: var(--accent);
   padding: 0.75rem 1rem;
-  white-space: nowrap;
   border-bottom: 1px solid var(--border);
 }
 
@@ -261,22 +308,45 @@
   background: color-mix(in oklab, var(--surface-1) 55%, transparent);
 }
 
-/* --------------------------------------------------------------------------
-   Blockquote — the "one line worth remembering" treatment from the READMEs.
-   -------------------------------------------------------------------------- */
-
-.prose blockquote {
-  margin-block: 2rem;
-  padding: 0.25rem 0 0.25rem 1.5rem;
-  border-left: 3px solid var(--accent);
-  font-size: 1.375rem;
-  line-height: 1.55;
-  font-style: italic;
-  color: var(--text);
+.prose td p,
+.prose th p {
+  margin-block: 0;
 }
 
-.prose blockquote p {
-  margin-block: 0.5rem;
+/* --------------------------------------------------------------------------
+   Mermaid — the SVG comes out of the renderer; these are the bits its theme
+   variables cannot reach.
+   -------------------------------------------------------------------------- */
+
+.mermaid-svg svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin-inline: auto;
+}
+
+.mermaid-svg .nodeLabel,
+.mermaid-svg .edgeLabel,
+.mermaid-svg .messageText,
+.mermaid-svg .labelText,
+.mermaid-svg .loopText {
+  font-family: var(--font-sans) !important;
+}
+
+.mermaid-svg .edgeLabel {
+  color: var(--text-muted);
+}
+
+.mermaid-svg .edgeLabel rect,
+.mermaid-svg .edgeLabel .labelBkg {
+  fill: var(--surface-1) !important;
+  background-color: var(--surface-1) !important;
+  opacity: 0.9;
+}
+
+/* Cluster/subgraph titles read as headings inside the diagram. */
+.mermaid-svg .cluster-label .nodeLabel {
+  font-weight: 600;
 }
 
 /* --------------------------------------------------------------------------
@@ -284,7 +354,6 @@
    -------------------------------------------------------------------------- */
 
 .prose img,
-.prose svg,
 .prose video {
   max-width: 100%;
   height: auto;
