@@ -1,0 +1,261 @@
+---
+title: "What a tool sends back"
+emoji: "📦"
+summary: "Text, images, resource links, structuredContent — and the difference between a protocol error and one the model can fix."
+project: 1
+---
+
+Project #1's tools all return one line of text, because that makes the
+mechanism visible. A tool can return considerably more than that, and the
+choices matter — particularly the two ways of reporting failure, which are not
+interchangeable.
+
+## Part 1 · Content blocks
+
+A tool result carries a `content` array, and each entry has a `type`.
+
+```json
+{
+  "resultType": "complete",
+  "content": [
+    { "type": "text", "text": "Current weather in New York:\nTemperature: 72°F" }
+  ],
+  "isError": false
+}
+```
+
+| Type | Carries | Use it for |
+|---|---|---|
+| `text` | a string | almost everything |
+| `image` | base64 data + `mimeType` | a chart, a screenshot, a rendered diagram |
+| `audio` | base64 data + `mimeType` | transcription input, generated speech |
+| `resource_link` | a `uri`, plus name and description | **pointing at** something big rather than inlining it |
+| `resource` | an embedded resource, contents and all | inlining a file the model needs right now |
+
+Note that a result may contain **several** blocks of **different** types. A
+tool that renders a chart can return the image *and* a sentence describing it,
+so a model that cannot see images still gets something useful.
+
+### `resource_link` is the one people miss
+
+If your tool finds ten files, you have two options. Inline all ten — which
+costs you every token of all ten, on every subsequent iteration, forever
+([the meter](/learn/host/the-meter) explains why that compounds). Or return
+ten links and let the host fetch only the ones it needs.
+
+```json
+{
+  "type": "resource_link",
+  "uri": "file:///project/src/main.rs",
+  "name": "main.rs",
+  "description": "Primary application entry point",
+  "mimeType": "text/x-rust"
+}
+```
+
+<Callout type="lesson" title="This is the same insight as project #4's, one layer down">
+  A worker that returns its whole transcript hands the context problem back to
+  the orchestrator. A tool that inlines ten files hands it back to the loop.
+
+  **Return conclusions and pointers; inline only what is needed now.**
+</Callout>
+
+## Part 2 · Structured output
+
+Text is what the model reads. Sometimes you also want data a *program* can
+rely on. That is `outputSchema` plus `structuredContent`.
+
+```json
+{
+  "name": "get_weather_data",
+  "inputSchema": { "type": "object", "properties": { "location": { "type": "string" } } },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "temperature": { "type": "number" },
+      "conditions":  { "type": "string" },
+      "humidity":    { "type": "number" }
+    },
+    "required": ["temperature", "conditions", "humidity"]
+  }
+}
+```
+
+And the result carries both:
+
+```json
+{
+  "resultType": "complete",
+  "content": [
+    { "type": "text", "text": "{\"temperature\": 22.5, \"conditions\": \"Partly cloudy\", \"humidity\": 65}" }
+  ],
+  "structuredContent": { "temperature": 22.5, "conditions": "Partly cloudy", "humidity": 65 }
+}
+```
+
+Two rules attach to it:
+
+- If you declare an `outputSchema`, servers **MUST** return structured results
+  that conform to it, and clients **SHOULD** validate them.
+- For backwards compatibility, a tool returning structured content **SHOULD**
+  also return the serialised JSON as a text block — which is why the example
+  above says the same thing twice.
+
+<Callout type="insight" title="`structuredContent` is not 'structured outputs'">
+  Worth separating, because the names collide. `structuredContent` is
+  **server-produced result data**. "Structured outputs" usually means
+  schema-constrained *model generation*, which is a different feature of a
+  different system.
+
+  One is your server promising a shape. The other is a model being forced into
+  one.
+</Callout>
+
+### When to bother
+
+Reach for it when something other than the model consumes the result — a UI
+rendering a card, a script asserting on a value, an eval checking a number.
+
+Skip it when the only consumer is the model. Project #1 deliberately skips it,
+and the reason is worth restating: a plain sentence is what lets the loop carry
+`Total: 44` into the next tool's `count` argument with no code in between.
+
+## Part 3 · Two kinds of error, and choosing wrong is expensive
+
+This is the part of the page that will save you real time.
+
+MCP has **two** error mechanisms, and they mean different things to the model.
+
+<Compare
+  leftLabel="Protocol error — JSON-RPC error"
+  rightLabel="Tool execution error — isError: true"
+  left={<><p>Something is wrong with the <strong>request itself</strong>.</p><p>Unknown tool. Malformed request. Server crashed.</p><p><code>{"{ \"error\": { \"code\": -32602, … } }"}</code></p><p>The model is <em>unlikely</em> to be able to fix it.</p></>}
+  right={<><p>The call was well-formed; the <strong>operation</strong> failed.</p><p>API down. Date in the past. Not enough cookies.</p><p><code>{"{ \"result\": { \"content\": [...], \"isError\": true } }"}</code></p><p>The model <strong>can</strong> self-correct from it.</p></>}
+/>
+
+The spec is explicit about the consequence:
+
+> Clients **MAY** provide protocol errors to language models, though these are
+> less likely to result in successful recovery. Clients **SHOULD** provide tool
+> execution errors to language models to enable self-correction.
+
+### What a good execution error looks like
+
+```json
+{
+  "resultType": "complete",
+  "content": [{
+    "type": "text",
+    "text": "Invalid departure date: must be in the future. Current date is 08/08/2025."
+  }],
+  "isError": true
+}
+```
+
+Look at what that sentence gives the model: **what was wrong**, **what the rule
+is**, and **the fact it needs** to construct a valid retry. It can fix this
+without asking anybody.
+
+Compare it with `{"error": "invalid input"}`, which gives the model nothing and
+guarantees either a blind retry or a shrug.
+
+<Callout type="lesson" title="A failure message is a prompt, not a log line">
+  The model has no channel for out-of-band information. Everything it learns
+  about what just happened arrives as text in the conversation.
+
+  This is the same lesson as [refusing politely in project
+  #1](/learn/server/anatomy-of-a-tool), [the deny branch in project
+  #3](/learn/gate/the-deny-branch), and [the spend refusal in project
+  #5](/learn/ledger/gate-cannot-pause) — three projects, one mistake, each time
+  more expensive.
+</Callout>
+
+<Callout type="gotcha" title="Throwing an exception is choosing the wrong one">
+  An unhandled throw in your handler becomes a **protocol** error — the
+  category the model is least able to recover from — for what is usually an
+  ordinary business-logic failure.
+
+  Catch it, and return `isError: true` with a sentence.
+</Callout>
+
+## Part 4 · Stateful tools, without sessions
+
+The modern protocol has **no session**. A server cannot rely on per-connection
+state to relate one call to the next, because there is no connection.
+
+So how does a shopping cart work?
+
+The spec's guidance — explicitly non-normative, because the protocol has no
+concept of it — is an **explicit handle**:
+
+```jsonc
+// → tools/call
+{ "name": "create_basket", "arguments": {} }
+
+// ← result
+{ "content": [{ "type": "text", "text": "Created basket bsk_a1b2c3" }],
+  "structuredContent": { "basket_id": "bsk_a1b2c3" } }
+
+// → tools/call
+{ "name": "add_item", "arguments": { "basket_id": "bsk_a1b2c3", "sku": "..." } }
+```
+
+**The model carries the handle forward.** The server stores state under that
+key.
+
+Four things to get right, and the first is a security issue:
+
+| Concern | What to do |
+|---|---|
+| **Authorization** | A handle is a *name*, not a capability. Validate the caller against it **on every call**. On an unauthenticated server the handle is necessarily a bearer token, so give it real entropy and a bounded lifetime. |
+| **Opacity** | Handles that encode structure invite guessing. Use opaque ids. |
+| **Lifetime** | State the retention policy **in the creation tool's description**, so the model can see it when deciding to create state. |
+| **Expiry** | A call on a dead handle should return an execution error saying so, so the model can create a new one. |
+
+<Callout type="insight" title="Notice where the retention policy lives">
+  In the **description**. Not in your docs, not in a README — in the one field
+  the model actually reads.
+
+  That is the recurring theme of this whole section: [the description is the
+  interface](/learn/server/anatomy-of-a-tool).
+</Callout>
+
+## Part 5 · A detail that pays for itself
+
+One line in the spec, easy to skim, worth real money:
+
+> Servers **SHOULD** return tools in a deterministic order […] Deterministic
+> ordering enables clients to reliably cache the tool list and **improves LLM
+> prompt cache hit rates** when tools are included in model context.
+
+Prompt caching is a **prefix match**. Your tool definitions sit near the front
+of every request the host makes. If they come back in a different order on
+different calls, the prefix changes, and every cache hit silently becomes a
+miss.
+
+No error. Just a bigger bill.
+
+<Callout type="warning" title="Iterating a JavaScript object or a database result without ORDER BY is how this happens">
+  Project #2 measured this from the other side: one cache breakpoint took a
+  three-iteration run from 7,542 full-price input tokens to about 4,004 — a
+  **47% saving**. That saving depends entirely on the prefix being
+  byte-identical.
+
+  A server that shuffles its tool list is quietly taxing every host that
+  connects to it. See [The meter](/learn/host/the-meter).
+</Callout>
+
+## What you now know
+
+- A result is an array of blocks — `text`, `image`, `audio`, `resource_link`,
+  `resource` — and may mix them.
+- `resource_link` lets you point instead of inline, which is the same
+  context-budget lesson as delegation.
+- `outputSchema` + `structuredContent` when a *program* consumes the result;
+  plain text when the model does.
+- **Two** error mechanisms: protocol errors the model cannot fix, and
+  `isError: true` execution errors it can. Never throw for business logic.
+- No sessions: carry state in an **explicit handle**, authorize it every call,
+  and put its lifetime in the description.
+- Return tools in a **deterministic order**, or you break everybody's prompt
+  cache.

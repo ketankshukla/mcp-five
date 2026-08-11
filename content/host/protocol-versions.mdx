@@ -1,0 +1,204 @@
+---
+title: "Two protocol eras"
+emoji: "🕰️"
+summary: "2026-07-28 removed sessions, the GET stream and server-initiated requests. How a client finds out which era it is talking to."
+project: 2
+---
+
+A host does not get to choose which version of MCP a server speaks. It connects
+to servers written by strangers, at whatever revision they were built against,
+and has to work anyway.
+
+There are two eras. The difference between them is not cosmetic — a whole
+capability works in one and cannot work in the other.
+
+## Part 1 · The two eras
+
+| | legacy era | modern era |
+|---|---|---|
+| versions | `2025-11-25` and earlier | `2026-07-28` |
+| negotiated | **once**, by an `initialize` handshake | **per request**, in a `_meta` envelope |
+| sessions | `Mcp-Session-Id` header, `DELETE` to end | **removed** |
+| standalone SSE stream | opened with `GET` | **removed** |
+| server→client requests | pushed down an open SSE stream | **removed** — replaced by a retry |
+| resumable streams | `Last-Event-ID` | **removed** |
+| works on serverless | tools, yes; pushes, no | fully |
+
+Read the "removed" column as a single sentence: **everything that assumed the
+server remembers you, or that a connection stays open, is gone.**
+
+<Callout type="lesson" title="The protocol became stateless because its implementers did">
+  Sessions, resumable streams and server pushes are all natural designs for a
+  process that boots once and runs for months. They are close to unimplementable
+  on a function that exists for the duration of one request.
+
+  The deployment target moved, and the protocol followed it. Every one of those
+  removals is replaced by something self-contained.
+</Callout>
+
+## Part 2 · What "per-request negotiation" actually looks like
+
+In the legacy era, you shake hands once and the connection remembers.
+
+In the modern era there is no connection to remember anything, so **every
+single request** carries who you are and what you can do:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "method": "tools/call",
+  "params": {
+    "name": "summarise_week",
+    "arguments": { "depth": "brief" },
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": { "name": "probe", "version": "1" },
+      "io.modelcontextprotocol/clientCapabilities": { "sampling": {} }
+    }
+  }
+}
+```
+
+Three namespaced keys, on every request:
+
+| Key | What it does |
+|---|---|
+| `…/protocolVersion` | selects the era, for this request |
+| `…/clientInfo` | who is calling |
+| `…/clientCapabilities` | **what you are willing to be asked for** |
+
+That last one is the whole security story of the modern era, and it is worth
+dwelling on.
+
+<Callout type="warning" title="Capabilities are a per-request declaration, so they are a per-request decision">
+  A server **MUST NOT** send you an input request for a capability you did not
+  declare. So a host that never puts `sampling: {}` in that envelope
+  **cannot be asked to spend money** — the request fails at the protocol layer,
+  before any gate, estimate or ledger of yours is involved.
+
+  Delete one line and the danger is gone entirely. See [What the host refuses
+  to trust](/learn/ledger/refuses-to-trust).
+</Callout>
+
+And because it is per-request rather than per-connection, a host can be
+*selective*: declare `sampling` on the call to a server you trust, and withhold
+it on the call to one you don't. That is not possible with a handshake.
+
+## Part 3 · Finding out which era you are talking to
+
+You cannot ask "which version do you speak?" without already having picked a
+version to ask in. So the answer is: **try the modern one and read the failure
+carefully.**
+
+<Diagram
+  caption="Attempt a modern request first. A 400 is not automatically 'this is a legacy server' — modern servers use 400 for three of their own errors, so the body has to be inspected before falling back."
+>
+{`flowchart TB
+    START(["🎛️ host wants to connect"]) --> TRY["POST a modern request<br/><i>_meta envelope + Mcp-Method header</i>"]
+    TRY --> CODE{"HTTP status?"}
+
+    CODE -->|"200"| MODERN(["✅ modern era<br/><i>2026-07-28</i>"])
+    CODE -->|"400 / 404 / 405"| BODY{"is the body a recognised<br/>MODERN JSON-RPC error?"}
+
+    BODY -->|"yes — e.g. UnsupportedProtocolVersion,<br/>MissingRequiredClientCapability,<br/>HeaderMismatch"| FIX["🔧 it IS a modern server.<br/>fix the request or retry with<br/>a version it advertises.<br/><b>do not fall back</b>"]
+    BODY -->|"no — empty or unrecognised"| LEGACY["↩️ fall back to<br/>the initialize handshake"]
+
+    LEGACY --> OLD(["🕰️ legacy era"])
+    FIX --> MODERN
+
+    style START fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style MODERN fill:#052e16,stroke:#4ade80,stroke-width:2px,color:#dcfce7
+    style OLD fill:#78350f,stroke:#fbbf24,color:#fef3c7
+    style BODY fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fecaca
+    style FIX fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe`}
+</Diagram>
+
+<Callout type="gotcha" title="The trap is treating 400 as 'must be legacy'">
+  Modern servers return `400` for at least three of their own errors:
+  `UnsupportedProtocolVersionError`, `MissingRequiredClientCapabilityError`,
+  and header-validation failures.
+
+  Fall back on the status code alone and you will downgrade a perfectly modern
+  server to the legacy path because you forgot an `Mcp-Name` header — and then
+  spend an afternoon wondering why sampling never fires against it.
+
+  **Inspect the body before you conclude anything.**
+</Callout>
+
+## Part 4 · Era negotiation is a try/catch, not a config flag
+
+This is the design decision worth stealing, and project #5 got it right for a
+slightly cynical reason: you are talking to **somebody else's deployment**, and
+any guess you hard-code about it will eventually be wrong.
+
+It paid off immediately.
+
+<Callout type="insight" title="Project #1's server had quietly moved on">
+  When project #5 enumerated every server it could reach, **project #1's live
+  deployment negotiated the modern era** — and turned out to be offering a
+  resource and a prompt that nobody remembered writing.
+
+  It had been advertising them correctly, to anybody who asked, for the entire
+  series. A hard-coded `legacy` for "the old project" would have hidden that
+  forever.
+</Callout>
+
+So the toolbox records the era it landed on, per server, and prints it:
+
+<Terminal title="npm run readonly">
+{`  ✓ The Kitchen (asks you to think)
+      era: 2026-07-28 (can ask you to think)
+      2 tool(s) · 2 resource(s) · 1 prompt(s)
+  ✓ Cookie Jar (project #1, forgetful)
+      era: 2026-07-28 (can ask you to think)
+      3 tool(s) · 1 resource(s) · 1 prompt(s)`}
+</Terminal>
+
+<Callout type="lesson" title="Print the negotiated era, always">
+  A server on the legacy era **cannot** ask your host to think — not because it
+  does not want to, but because the transport cannot deliver the request.
+
+  If sampling silently never happens, this column is the first place to look,
+  and it costs one line of output to have it.
+</Callout>
+
+## Part 5 · A constant that lies
+
+The last thing, and it is the one that cost project #5 a design detour.
+
+```bash
+node --input-type=module -e "
+import { LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/server';
+console.log(LATEST_PROTOCOL_VERSION, JSON.stringify(SUPPORTED_PROTOCOL_VERSIONS));"
+```
+
+<Terminal>
+{`2025-11-25 ["2025-11-25","2025-06-18","2025-03-26","2024-11-05","2024-10-07"]`}
+</Terminal>
+
+No `2026-07-28` anywhere. A constant named `LATEST_PROTOCOL_VERSION` does not
+contain the latest protocol version.
+
+It is not a bug. Those constants describe the **`initialize`-negotiated** era
+only — the modern era is not negotiated by a handshake at all, so it does not
+appear in a list of handshake-negotiable versions. Two code paths, and the
+constant only knows about one.
+
+<Callout type="quote">
+  A constant named `LATEST_` answers a narrower question than its name implies.
+  When types and constants disagree, the wire is the tiebreaker.
+</Callout>
+
+## What you now know
+
+- Two eras: legacy (`initialize` handshake, sessions, pushes) and modern
+  (`2026-07-28`, per-request `_meta`, no sessions, no pushes).
+- Every removal in the modern era replaces stateful machinery with something
+  self-contained.
+- `clientCapabilities` travels **per request**, which makes the dangerous
+  capabilities both opt-in *and* selectable per server.
+- Detect the era by trying modern first and **reading the error body** — a
+  `400` alone does not mean legacy.
+- Negotiate with a `try`/`catch` and **print the era you landed on**.
+- `LATEST_PROTOCOL_VERSION` describes only the handshake path.

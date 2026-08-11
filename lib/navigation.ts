@@ -141,6 +141,20 @@ export const SECTIONS: NavSection[] = [
           "say_hello, roll_dice, secret_code, cookie_jar — and why a dice roller goes first.",
       },
       {
+        slug: "transports",
+        title: "How a server is actually reached",
+        emoji: "🚚",
+        summary:
+          "stdio and Streamable HTTP — one POST per message, why Accept needs two values, and the DNS-rebinding rule everyone skips.",
+      },
+      {
+        slug: "structured-results",
+        title: "What a tool sends back",
+        emoji: "📦",
+        summary:
+          "Text, images, resource links, structuredContent — and the difference between a protocol error and one the model can fix.",
+      },
+      {
         slug: "the-sandcastle",
         title: "The sandcastle",
         emoji: "🏖️",
@@ -193,6 +207,13 @@ export const SECTIONS: NavSection[] = [
         emoji: "🧺",
         summary:
           "Namespacing, Promise.allSettled, and the mildest version of the whole series' idea: a host curates.",
+      },
+      {
+        slug: "protocol-versions",
+        title: "Two protocol eras",
+        emoji: "🕰️",
+        summary:
+          "2026-07-28 removed sessions, the GET stream and server-initiated requests. How a client finds out which era it is talking to.",
       },
       {
         slug: "the-meter",
@@ -449,6 +470,13 @@ export const SECTIONS: NavSection[] = [
         emoji: "⚠️",
         summary:
           "All forty things that actually broke, filterable by project and by category.",
+      },
+      {
+        slug: "what-the-spec-says",
+        title: "What the specification actually requires",
+        emoji: "📜",
+        summary:
+          "The official MUSTs and SHOULDs, and where these five projects satisfy them, exceed them, or fall short.",
       },
       {
         slug: "capabilities-in-practice",

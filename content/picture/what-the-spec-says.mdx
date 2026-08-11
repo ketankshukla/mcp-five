@@ -1,0 +1,195 @@
+---
+title: "What the specification actually requires"
+emoji: "📜"
+summary: "The official MUSTs and SHOULDs, and where these five projects satisfy them, exceed them, or fall short."
+---
+
+Everything so far has been taught from five projects — what was built, what
+broke, and what the person building it concluded. That is the useful half.
+
+This page is the other half: **what the specification itself requires**, in its
+own words, and an honest accounting of where these five projects meet it, beat
+it, or miss it.
+
+<Callout type="insight" title="Why this page exists">
+  A course taught entirely from one person's projects teaches you their
+  conclusions, including the wrong ones. Reading the conclusions next to the
+  standard is how you tell which is which.
+
+  Two of the rows below are places the projects **fall short**.
+</Callout>
+
+The specification uses [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119)
+keywords: **MUST** is a requirement, **SHOULD** is a strong recommendation with
+a defensible exception, **MAY** is optional.
+
+## The three principles
+
+The spec opens with three, before any protocol detail:
+
+<Steps>
+  <Step n={1} title="User consent and control">
+    > Users must explicitly consent to and understand all data access and
+    > operations. Users must retain control over what data is shared and what
+    > actions are taken.
+
+    This is [project #3's entire subject](/learn/gate/hint-not-permission) —
+    and note that "understand" is doing as much work as "consent". An approval
+    card that says *"approve `empty_jar {id:38}`?"* with no context technically
+    obtains consent and fails this principle, which is exactly why project #4
+    carries [`origin` up the tree](/learn/crew/five-agents-one-human).
+  </Step>
+
+  <Step n={2} title="Data privacy">
+    > Hosts must obtain explicit user consent before exposing user data to
+    > servers. Hosts must not transmit resource data elsewhere without user
+    > consent.
+
+    The direction here is easy to miss. It is not only about what servers send
+    *you* — it is about what your host sends *them*.
+  </Step>
+
+  <Step n={3} title="Tool safety">
+    > Tools represent arbitrary code execution and must be treated with
+    > appropriate caution. In particular, descriptions of tool behavior such as
+    > **annotations should be considered untrusted, unless obtained from a
+    > trusted server.**
+
+    There it is, in the specification, in the same words project #3 arrived at
+    independently.
+  </Step>
+</Steps>
+
+## The line that validates project #3
+
+Said twice, and the second time as a `MUST`:
+
+<Callout type="quote">
+  For trust & safety and security, clients **MUST** consider tool annotations to
+  be untrusted unless they come from trusted servers.
+</Callout>
+
+[Project #3's thesis](/learn/gate/hint-not-permission) — *a hint from the other
+side of a network boundary is not a permission model* — was reached by
+reasoning about `destructiveHint` from first principles, and it turns out to be
+the specification's own position.
+
+That is a useful thing to know for two reasons. It means the argument was
+right. And it means **the flag exists anyway**, so plenty of implementations
+are reading it, because a field in a schema is an invitation.
+
+## Where the five projects stand
+
+| Requirement | Status | Where |
+|---|---|---|
+| Annotations untrusted — **MUST** | ✅ **Exceeds.** The host never reads `destructiveHint`, not even as a tiebreaker. | [The gate](/learn/gate/hint-not-permission) |
+| Human in the loop able to deny — **SHOULD** | ✅ Met, and it survives delegation. | [Five agents, one human](/learn/crew/five-agents-one-human) |
+| Show tool inputs to the user before calling — **SHOULD** | ✅ The approval card shows exact arguments. ⚠️ But only for *gated* calls — [default-allow](/learn/gate/default-allow) means ungated calls run unseen. | [The gate](/learn/gate/rules-read-arguments) |
+| `requestState` integrity-protected — **MUST** | ⚠️ **Partially.** HMAC-signed and verified. But the spec also asks for replay protection — see below. | [Data does not stay yours](/learn/ledger/data-not-yours) |
+| Validate `Origin`, prevent DNS rebinding — **MUST** | ❌ **Not implemented.** These are hosted on Vercel rather than localhost, which sidesteps the specific attack, but the requirement is unconditional. | [Transports](/learn/server/transports) |
+| Rate limit tool invocations — **MUST** | ❌ **Not implemented** at the server. The *host* caps itself with five seatbelts, which is a different thing. | [Seatbelts](/learn/crew/seatbelts) |
+| Log tool usage for audit — **SHOULD** | ✅ **Exceeds.** Every loop event is a row, replayable. | [Replay](/learn/gate/replay) |
+| Deterministic tool ordering — **SHOULD** | ✅ Met, and [it is why prompt caching works](/learn/host/the-meter). |  |
+| Disambiguate tools from multiple servers — **SHOULD** | ✅ `server__tool`, split on the *first* separator. | [One shelf, many servers](/learn/host/the-toolbox) |
+| Tool execution errors returned to the model — **SHOULD** | ✅ Refusals are sentences the model can act on. | [What a tool sends back](/learn/server/structured-results) |
+
+<Callout type="warning" title="Two honest failures">
+  **`Origin` validation** is a `MUST` and none of the five servers do it. The
+  deployment shape makes the specific attack impractical, and that is a
+  mitigating circumstance rather than compliance.
+
+  **Server-side rate limiting** is a `MUST` and none of them do that either.
+  Project #4's seatbelts limit what the *host* will spend; they do nothing to
+  stop a different client hammering the pantry.
+
+  A course that only listed the things its source material got right would be
+  advertising, not teaching.
+</Callout>
+
+## The `requestState` requirements, in full
+
+[Project #5's page](/learn/ledger/data-not-yours) gets the headline right —
+sign it, verify it, reject what fails. The specification asks for more than
+that, and the extra parts are worth having.
+
+<Callout type="quote">
+  If `requestState` influences authorization, resource access, or business
+  logic, servers **MUST** protect its integrity (e.g. HMAC or AEAD) and **MUST**
+  reject state that fails verification.
+</Callout>
+
+Then, for replay:
+
+| Include inside the protected payload | Rejects |
+|---|---|
+| the **authenticated principal** | state minted for one user, presented by another |
+| a short **expiry (TTL)** | state captured today, replayed next month |
+| an **identifier for the originating request** — the method name and a digest of its salient parameters | state from a *cheap* call, presented on an *expensive* one |
+
+That third row is the clever one. Without it, an attacker takes the
+`requestState` from a call they were allowed to make and attaches it to a
+different call, inheriting whatever the server decided the first time.
+
+<Callout type="warning" title="And a limit the spec states about its own advice">
+  > Note that these measures bound the replay window and prevent cross-user and
+  > cross-request reuse, but **do not by themselves guarantee single-use**.
+  > Servers for which a given `requestState` must be consumed at most once
+  > (e.g., one-time redemptions) **MUST** enforce that invariant server-side.
+
+  Signing proves *nobody changed it*. It does not prove *this is the first time
+  I have seen it*. If the operation must happen once, you need a record of what
+  has been spent — which means state, which is the thing MRTR was designed to
+  avoid. That tension is real and the spec does not pretend otherwise.
+</Callout>
+
+## Things in the spec this course does not cover
+
+Named so you know they exist and that their absence here is a choice.
+
+| Feature | What it is |
+|---|---|
+| **Pagination** | `tools/list` supports a `cursor`. Matters when a server has hundreds of tools. |
+| **Caching** | `tools/list` results carry `ttlMs` and `cacheScope`. |
+| **Subscriptions** | `subscriptions/listen` opens the long-lived stream that carries `notifications/tools/list_changed` and friends. |
+| **Progress & cancellation** | Progress notifications on a request's own SSE stream; closing the stream **is** the cancellation. |
+| **`x-mcp-header`** | Mirror a tool parameter into an `Mcp-Param-*` HTTP header so proxies can route on it without parsing the body. |
+| **Extensions** | Opt-in, negotiated: **Tasks** (long-running work with durable handles), **Skills over MCP**, **MCP Apps** (interactive UI inline in a conversation). |
+
+<Callout type="insight" title="Roots is deprecated, and the reasoning transfers">
+  The `roots` feature — a client telling a server which directories it considers
+  relevant — is **deprecated as of `2026-07-28`**. New implementations
+  **SHOULD NOT** adopt it.
+
+  Read why: roots were *"informational guidance rather than an access-control
+  mechanism. The protocol does not enforce that servers stay within roots."*
+
+  A field that looks like a boundary and enforces nothing is the same shape as
+  `destructiveHint`. The recommended replacement is to pass paths as ordinary
+  tool parameters — where they are plainly **input**, and get treated as such.
+</Callout>
+
+## The honest summary
+
+The specification and these five projects agree on almost everything that
+matters, and the two places they disagree are places the projects are **behind**
+it, not ahead.
+
+What the projects add is not new rules. It is the **cost** of the rules: that a
+default-deny gate produces click-fatigue in ninety seconds, that a refusal
+worded badly makes a model retry until it has burned ten iterations, that a
+counter re-scopes itself the moment you split a request in two.
+
+<Callout type="quote">
+  The specification tells you what to build. Forty things breaking tells you
+  what it feels like to build it.
+</Callout>
+
+**Sources:** [MCP specification, revision
+2026-07-28](https://modelcontextprotocol.io/specification/latest) ·
+[Tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools) ·
+[Multi round-trip
+requests](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr)
+· [Streamable
+HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
+· [Roots
+(deprecated)](https://modelcontextprotocol.io/specification/2026-07-28/client)

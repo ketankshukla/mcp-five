@@ -1,0 +1,261 @@
+---
+title: "How a server is actually reached"
+emoji: "🚚"
+summary: "stdio and Streamable HTTP — one POST per message, why Accept needs two values, and the DNS-rebinding rule everyone skips."
+project: 1
+---
+
+So far the course has said "MCP is JSON over HTTP" and moved on. That is true
+of the servers in this series, and it is not the whole story. **How** the JSON
+gets from one side to the other is called the **transport**, and there are two
+of them.
+
+This page is the one most introductions skip, and it explains a surprising
+number of the errors you will actually hit.
+
+## Part 1 · The two transports
+
+<Compare
+  leftLabel="stdio — a local subprocess"
+  rightLabel="Streamable HTTP — a remote endpoint"
+  left={<><p>The host <strong>launches your server as a child process</strong> and talks to it over standard input and standard output.</p><p>One JSON-RPC message per line. No network, no ports, no auth.</p><p>Used by: local dev tools, filesystem servers, anything on your own machine.</p></>}
+  right={<><p>Your server is an ordinary web service at a URL. The host sends <strong>an HTTP POST per message</strong>.</p><p>Used by: anything hosted, anything shared, and everything in this course.</p></>}
+/>
+
+They carry exactly the same JSON-RPC messages. Nothing above the transport
+changes — the same `tools/list` request, the same tool definitions, the same
+results. That separation is the point of having a named transport layer at
+all.
+
+### Which one you want
+
+| If your server… | Use |
+|---|---|
+| reads local files, or wraps a local CLI | **stdio** |
+| needs to be reachable by more than one person | **Streamable HTTP** |
+| is deployed anywhere | **Streamable HTTP** |
+| needs no auth because only you can run it | **stdio** |
+
+All five projects in this course use Streamable HTTP, because they are
+deployed to Vercel and callable from anywhere.
+
+<Callout type="insight" title="This is also why the sampling story in project #5 is what it is">
+  A stdio server is a **long-lived process** with a pipe held open. A
+  Streamable HTTP server on serverless is a function that exists for the
+  duration of one request.
+
+  Almost every sampling tutorial was written against the first shape. [The
+  finding](/learn/ledger/the-finding) is what happens when you try it in the
+  second.
+</Callout>
+
+## Part 2 · Streamable HTTP, precisely
+
+The rules are short enough to list in full.
+
+**The server exposes one endpoint that accepts POST.** Not a family of
+endpoints — one URL, e.g. `https://example.com/mcp`.
+
+**Every message is its own POST.** There is no persistent connection to
+maintain, no handshake to keep alive, no socket to reconnect.
+
+**The body is a single JSON-RPC request or notification.** The client never
+sends JSON-RPC *responses*.
+
+**The reply is either JSON or an SSE stream, and the server chooses.** This is
+the bit that catches people:
+
+> If the body is a JSON-RPC *request*, the server **MUST** return either
+> `Content-Type: application/json` (a single JSON object) or
+> `Content-Type: text/event-stream` (an SSE response stream). The client
+> **MUST** support both.
+
+<Callout type="gotcha" title="Which is why Accept must list both">
+  ```http
+  Accept: application/json, text/event-stream
+  ```
+
+  The client is declaring *"I can handle whichever you pick."* Omit either
+  value and a conforming server has no legal way to answer you, so you get a
+  bare **`406 Not Acceptable`** with nothing useful in the body.
+
+  This is the single most common first-contact error with MCP, and it is why
+  [project #2's hand-written client](/learn/host/client-by-hand) needs a small
+  SSE reader as well as `JSON.parse`.
+</Callout>
+
+**A notification gets `202 Accepted` with no body.** Notifications have no
+`id` and expect no reply.
+
+### Why a server would choose SSE
+
+Because a single POST can carry *progress* before it carries an answer.
+
+```text
+POST tools/call  ──────────────────────────────►
+                 ◄── SSE: notifications/progress   (33%)
+                 ◄── SSE: notifications/progress   (67%)
+                 ◄── SSE: the actual JSON-RPC response
+                     stream closes
+```
+
+A long-running tool can report as it goes, on the response stream of the
+request it belongs to. A fast tool just answers with plain JSON.
+
+<Callout type="lesson" title="And closing the stream is how you cancel">
+  Because each request owns its own response stream, hanging up is
+  unambiguous:
+
+  > Closing the SSE response stream **MUST** be treated by the server as
+  > cancellation of that request.
+
+  No cancel message, no request id to track. The transport-level disconnect
+  *is* the cancellation.
+</Callout>
+
+### Two operational details worth knowing before production
+
+**`X-Accel-Buffering: no`.** Reverse proxies like nginx buffer responses by
+default, which accumulates your SSE events and delivers them in a lump —
+destroying the entire point of streaming. The spec tells servers to send this
+header when opening a stream.
+
+**Keep-alive comments.** On a long-lived stream, emit an SSE comment line
+(`:` followed by a newline) periodically. Any line starting with a colon is a
+comment carrying no data, and it stops intermediaries and idle timeouts from
+closing a quiet connection.
+
+## Part 3 · The security rules almost nobody implements
+
+These are `MUST` and `SHOULD` requirements in the specification, and they exist
+because of a specific, real attack.
+
+<Callout type="warning" title="DNS rebinding against your local MCP server">
+  You run an MCP server on `localhost:3000` for local development. It has no
+  auth, because who else could reach `localhost`?
+
+  You then visit a web page. That page's JavaScript makes requests to a domain
+  the attacker controls, whose DNS record they flip to `127.0.0.1`. The
+  browser now happily sends requests to **your local server**, from a page you
+  did not write, carrying whatever that page wants.
+
+  Your "only I can reach it" assumption was about the network. The attack came
+  through the browser.
+</Callout>
+
+The specification's three defences:
+
+<Steps>
+  <Step n={1} title="Validate the Origin header — MUST">
+    > Servers **MUST** validate the `Origin` header on all incoming
+    > connections to prevent DNS rebinding attacks. If the `Origin` header is
+    > present and invalid, servers **MUST** respond with HTTP 403 Forbidden.
+
+    The rebound request carries the attacker's origin, and your server refuses
+    it. This is the actual fix; the other two are depth.
+  </Step>
+
+  <Step n={2} title="Bind to 127.0.0.1, not 0.0.0.0 — SHOULD">
+    > When running locally, servers **SHOULD** bind only to localhost
+    > (127.0.0.1) rather than all network interfaces (0.0.0.0).
+
+    Binding to `0.0.0.0` puts your unauthenticated dev server on every
+    interface, including the coffee shop wifi.
+  </Step>
+
+  <Step n={3} title="Authenticate anyway — SHOULD">
+    > Servers **SHOULD** implement proper authentication for all connections.
+
+    [Project #2](/learn/host/build-it-2) does this with `withMcpAuth` and a
+    shared token — and then discovers that locking a server is a decision with
+    consequences for whoever wants to use it next.
+  </Step>
+</Steps>
+
+## Part 4 · The headers the modern era requires
+
+The 2026-07-28 revision mirrors some body fields into HTTP headers, so that
+load balancers and gateways can route and rate-limit **without parsing the
+JSON body**.
+
+```http
+POST /mcp HTTP/1.1
+Content-Type: application/json
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: get_weather
+
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "get_weather", "arguments": { "location": "Seattle, WA" }, … } }
+```
+
+| Header | Mirrors | Required for |
+|---|---|---|
+| `MCP-Protocol-Version` | `_meta` protocol version | every request |
+| `Mcp-Method` | `method` | every request |
+| `Mcp-Name` | `params.name` or `params.uri` | `tools/call`, `resources/read`, `prompts/get` |
+
+### And they are checked against the body
+
+This is the interesting part, and the reason for error code **`-32020`**:
+
+> Servers that process the request body **MUST** reject requests where the
+> values specified in the headers do not match the corresponding values in the
+> request body. This prevents potential security vulnerabilities when
+> different components in the network rely on different sources of truth.
+
+<Callout type="lesson" title="Read that reasoning twice — it generalises well beyond MCP">
+  A load balancer routes on the **header**. Your server executes on the
+  **body**. If they can disagree, an attacker picks a header that gets them
+  past the gateway and a body that does something else entirely.
+
+  Any time the same fact is stated in two places for two different consumers,
+  **something must verify they agree.** MCP made that a `MUST` and gave it its
+  own error code.
+</Callout>
+
+If you hand-write a client and get a `-32020`, you have almost certainly
+forgotten `Mcp-Name` on a `tools/call`, or changed the tool name in one place
+and not the other.
+
+## Part 5 · What the modern revision took away
+
+If you have read older MCP material, three things you may be expecting are
+gone as of `2026-07-28`:
+
+| Removed | Was | Now |
+|---|---|---|
+| **The GET stream** | A standalone SSE stream, opened with `GET`, for server-initiated messages | Gone. Use `subscriptions/listen`, whose *response* is the stream. |
+| **Protocol-level sessions** | `Mcp-Session-Id` header, terminated with `DELETE` | Gone. Requests are self-contained. |
+| **Server-initiated requests** | Servers could send their own JSON-RPC requests down an SSE stream | Gone — replaced by [multi round-trip requests](/learn/ledger/the-finding). |
+
+A server that only speaks the modern revision should answer `GET` or `DELETE`
+on its endpoint with `405 Method Not Allowed`, ignore any `Mcp-Session-Id`, and
+ignore `Last-Event-ID` — streams are no longer resumable.
+
+<Callout type="insight" title="Notice the direction of every one of those changes">
+  Sessions, resumable streams and pushes all assume **the server remembers
+  you** and **a connection stays open**. All three were removed, and the
+  replacement in each case is a self-contained request.
+
+  The protocol moved toward statelessness because that is what its
+  implementers were actually deploying onto. Project #5 ran into the old shape
+  and had to discover this from a deprecation notice; now it is simply how the
+  transport works.
+</Callout>
+
+## What you now know
+
+- **stdio** for local subprocesses, **Streamable HTTP** for anything reachable.
+  Same messages either way.
+- One endpoint, **one POST per message**, and the reply may be JSON *or* SSE —
+  which is why `Accept` must list both, and why omitting one gives a bare
+  `406`.
+- Closing the SSE stream **is** cancellation.
+- `Origin` validation is a **MUST**, and it exists because of DNS rebinding
+  against unauthenticated localhost servers.
+- The modern era mirrors `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name`
+  into headers, and **`-32020`** means they disagree with the body.
+- Sessions, the GET stream and server-initiated requests were all removed in
+  `2026-07-28`.
