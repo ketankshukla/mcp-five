@@ -5,43 +5,63 @@ summary: "`cookie_jar` isn't dangerous. `cookie_jar { action: \"eat\" }` is. The
 project: 3
 ---
 
+You have accepted that [the host owns the
+list](/learn/gate/hint-not-permission). Now: what goes on it?
+
+The obvious answer is *tool names*. The obvious answer is wrong, and it is
+wrong in a way that forces you into a choice with no acceptable side.
+
+## Part 1 · A name-only gate forces a bad choice
+
 `cookie_jar` is not a dangerous tool.
 
 `cookie_jar { action: "eat" }` is.
 
-Same tool. Same name. Same server. One of them reads a number; the other
-destroys something that cannot be un-destroyed.
+Same tool. Same name. Same server. One reads a number; the other destroys
+something that cannot be un-destroyed.
 
-## A name-only gate forces a bad choice
-
-If your rules key on tool names, you have exactly two options for `cookie_jar`,
-and both are wrong:
+If your rules key on names, you have exactly two options for `cookie_jar`:
 
 <Compare
   leftLabel="Gate the name"
   rightLabel="Don't gate the name"
-  left={<><p>The agent stops and asks before it can even <strong>look</strong> in the jar.</p><p>You are now clicking Approve on <code>action: &quot;look&quot;</code> several times a minute, which is how click-fatigue starts.</p></>}
+  left={<><p>The agent stops and asks before it can even <strong>look</strong> in the jar.</p><p>You are now clicking Approve on <code>action: &quot;look&quot;</code> several times a minute — which is <a href="/learn/gate/default-allow">how click-fatigue starts</a>, and click-fatigue is worse than no gate.</p></>}
   right={<><p>The agent empties the jar without asking.</p><p>Which is the exact thing the gate exists to prevent.</p></>}
 />
 
-Neither is acceptable, and the reason is not that the cookie jar is badly
-designed. **Real tools are shaped exactly the same way.**
+Neither is acceptable. And the reason is not that the cookie jar is badly
+designed.
+
+## Part 2 · Real tools are shaped exactly the same way
 
 | Tool | Fine | Not fine |
 |---|---|---|
-| `sql` | `SELECT` | `DROP TABLE` |
-| `github` | reading an issue | force-pushing to main |
+| `sql` | `SELECT * FROM users LIMIT 10` | `DROP TABLE users` |
+| `github` | reading an issue | force-pushing to `main` |
 | `stripe` | fetching a customer | issuing a refund |
-| `shell` | `ls` | `rm -rf` |
+| `shell` | `ls` | `rm -rf /` |
+| `k8s` | `get pods` | `delete namespace prod` |
+| `email` | listing the inbox | sending to 4,000 people |
 
-In every one of those, the verb lives in the **arguments**. The tool name is a
-namespace, not a permission.
+In every one of those, the destructive act and the harmless act **share a tool
+name**. The name is a namespace — a rough category of capability — not a
+permission.
 
 <Callout type="quote">
   The verb lives in the arguments, so the gate has to read them.
 </Callout>
 
-## So a rule is a predicate
+<Callout type="insight" title="This is also why one-tool-per-verb doesn't rescue you">
+  You could split `sql` into `sql_read` and `sql_write` and gate the second.
+  Sometimes that is the right design.
+
+  But you do not control most of the servers you connect to, and **they will
+  not do that**. `sql` with a `query` string is the shape the ecosystem ships.
+  A host that can only reason about names cannot protect you from the tools
+  that actually exist.
+</Callout>
+
+## Part 3 · So a rule is a predicate
 
 ```ts title="lib/approval.ts"
 {
@@ -53,31 +73,126 @@ namespace, not a permission.
 }
 ```
 
-Four fields, and each one is pulling its weight:
+Four fields, and each is pulling its weight:
 
 | Field | Job |
 |---|---|
-| `tool` | the namespaced name the model sees — `cookiejar__cookie_jar` |
-| `when` | plain English, for the docs and the UI. Not used in the decision. |
+| `tool` | the **namespaced** name the model sees — `cookiejar__cookie_jar` |
+| `when` | plain English, for the docs and the UI. **Not used in the decision.** |
 | `matches` | the actual predicate, over the model's arguments |
 | `reason` | shown to the human when it fires |
 
-`when` is worth noticing. It exists purely so the rule table can be *printed* —
-in the checkpoint script, and in the browser — without anybody reading
-JavaScript to find out what the gate does.
+### `when` earns its place
+
+It exists purely so the rule table can be **printed** — in the checkpoint
+script, and in the browser — without anybody reading JavaScript to find out
+what the gate does.
+
+```bash
+npm run mcp:translate   # ends with the rule table and a per-tool verdict
+```
 
 <Callout type="lesson" title="A security control nobody can read is a security control nobody audits">
-  ```bash
-  npm run mcp:translate
-  ```
+  You can see, before running anything, exactly which calls would stop.
 
-  ends with the rules table and a per-tool verdict. You can see, before running
-  anything, exactly which calls would stop.
+  Keeping a human-readable restatement next to a machine-readable predicate has
+  an obvious risk — they can disagree. That is a real cost, and it is worth
+  paying, because the alternative is a gate whose behaviour is only discoverable
+  by reading code or by triggering it.
 </Callout>
 
-## What is deliberately *not* on the list
+## Part 4 · `args` is untrusted, and the rule must survive that
 
-Just as instructive as what is:
+This is the part people skip, and it is a genuine availability bug waiting to
+happen.
+
+`args` is **whatever the model produced**. Not whatever your schema says —
+the gate runs *before* dispatch, and the model can emit anything.
+
+```ts
+export function classifyCall(toolName: string, args: unknown): GateVerdict {
+  const safeArgs: Record<string, unknown> =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? (args as Record<string, unknown>)
+      : {};
+
+  for (const rule of RULES) {
+    if (rule.tool !== toolName) continue;
+
+    let hit = false;
+    try {
+      hit = rule.matches(safeArgs);
+    } catch {
+      // If we cannot tell whether this call is dangerous, that is exactly
+      // when to ask a human.
+      return {
+        decision: "ask",
+        reason: `Could not evaluate the safety rule for ${toolName}, so it is being treated as dangerous.`,
+      };
+    }
+
+    if (hit) return { decision: "ask", reason: rule.reason };
+  }
+
+  return { decision: DEFAULT_DECISION };
+}
+```
+
+Three defensive decisions in there:
+
+**`args: unknown`, deliberately.** Typing it as your expected shape would be a
+lie, and the compiler would then let you write `args.action.toLowerCase()`
+against something that might be `null`.
+
+**Non-objects become `{}`.** A rule that does `args.action === "eat"` against
+`null` throws. Normalising first means most rules can be written naively.
+
+**A crashing rule fails *closed*.**
+
+<Callout type="warning" title="There are only two wrong answers, and fail-closed picks neither">
+  A rule that throws could reasonably do one of three things:
+
+  - **crash the run** — now a malformed argument is a denial of service
+  - **silently allow** — now a malformed argument is a *gate bypass*
+  - **ask a human** — the only answer that is neither
+
+  If you cannot determine whether something is dangerous, that is precisely the
+  situation the human is there for.
+</Callout>
+
+## Part 5 · The three rules, and why they are three different shapes
+
+Project #3's whole list is three entries, deliberately not all the same kind of
+predicate:
+
+| Rule | Fires when | Why |
+|---|---|---|
+| `smash_jar` | **always** | Permanently deletes every cookie *and* erases the jar's history. No undo, no backup. |
+| `cookie_jar` | `action` is `"eat"` | Cookies cannot be un-eaten. A human should see the number first. |
+| `cookie_jar` | `action` is `"refill"` | Resets the jar to exactly 12. **If the jar holds more than 12, this silently destroys the difference.** |
+
+**Row one** is the name-only case, and it still exists — sometimes the whole
+tool really is dangerous. Reading arguments does not mean you must.
+
+**Row two** is the argument case.
+
+**Row three** is the interesting entry, and the one that would not occur to you.
+
+<Callout type="gotcha" title="`refill` sounds constructive">
+  It has a friendly name and it *adds* cookies most of the time.
+
+  Any operation that overwrites unbounded state with a fixed value can destroy
+  an arbitrary amount of it. `refill`, `reset`, `sync`, `restore from backup`,
+  `set quantity`, `replace all` — every one reads as safe, and every one can be
+  the most destructive thing in your toolbox.
+
+  A gate written by scanning tool names for scary words catches `smash_jar` and
+  misses this completely.
+</Callout>
+
+### And what is deliberately *not* on the list
+
+Just as instructive:
 
 ```text
 cookiejar__jar_history      reading is free
@@ -87,42 +202,37 @@ cookiejar__secret_code      ditto
 toolbox__secret_code        ditto
 ```
 
-Nothing they do is hard to undo, so stopping to ask would be pure friction —
-and friction is not free, it is the thing that makes people stop reading the
-cards.
+Every rule you add spends some of a **fixed budget of interruptions**. Stopping
+for something reversible does not buy safety; it buys noise, and noise is what
+makes people stop reading the cards that matter.
 
-## Three rules, three different shapes
-
-Project #3's whole list is three entries, and they are deliberately not all the
-same kind of predicate:
-
-| Rule | Fires when | Why |
-|---|---|---|
-| `smash_jar` | **always** | Permanently deletes every cookie *and* erases the jar's history. No undo, no backup. |
-| `cookie_jar` | `action` is `"eat"` | Cookies cannot be un-eaten. A human should see the number first. |
-| `cookie_jar` | `action` is `"refill"` | Resets the jar to exactly 12. **If the jar holds more than 12, this silently destroys the difference.** |
-
-That third one is the interesting entry. `refill` sounds constructive. It has a
-friendly name and it *adds* cookies most of the time.
-
-<Callout type="insight" title="Dangerous is not the same as negative-sounding">
-  Any operation that overwrites unbounded state with a fixed value can destroy
-  an arbitrary amount of it. `refill`, `reset`, `sync`, `restore from backup`,
-  `set quantity` — all of them read as safe and all of them can be the most
-  destructive thing in your toolbox.
-
-  A gate built by scanning tool names for scary words would have caught
-  `smash_jar` and missed this one.
-</Callout>
-
-## Where this goes next
+## Part 6 · Where this goes next
 
 Reading arguments turns out to be necessary but not sufficient.
 
 Project #5 hits a tool where even reading the arguments does not tell you
-whether to stop, because the thing being controlled is *cost*, and cost has to
-be **computed** from the arguments rather than matched against them. The same
-`summarise_week` call is 0.22¢ or 6.0¢ depending on one string.
+whether to stop, because the thing being controlled is **cost** — and cost has
+to be *computed* from the arguments rather than matched against them.
 
-At that point the rule stops being a predicate and becomes a number. See [A
-budget is not a gate](/learn/ledger/budget-not-gate).
+The same `summarise_week` call is **0.22¢** or **6.0¢** depending on one string.
+
+<Callout type="insight" title="At that point the rule stops being a predicate and becomes a number">
+  `matches: (args) => args.depth === "deep"` would work for exactly this
+  server, on exactly this tool, until somebody changes the pantry size.
+
+  What you actually want is *"refuse anything estimated over 2¢"* — which is a
+  rule about the **consequence**, not the shape. See [A budget is not a
+  gate](/learn/ledger/budget-not-gate).
+</Callout>
+
+## What you now know
+
+- Name-only gates force a choice between click-fatigue and no protection.
+- Real tools share a name across safe and destructive uses — `sql`, `github`,
+  `stripe`, `shell`. **The verb is in the arguments.**
+- A rule is `tool` + `matches` + `reason`, plus a plain-English `when` so the
+  list can be printed and audited.
+- `args` is untrusted: type it `unknown`, normalise non-objects, and **fail
+  closed** when a rule throws.
+- Friendly-sounding overwrite operations belong on the list.
+- Every rule spends part of a fixed interruption budget.

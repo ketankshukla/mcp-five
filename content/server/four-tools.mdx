@@ -5,63 +5,124 @@ summary: "say_hello, roll_dice, secret_code, cookie_jar — and why a dice rolle
 project: 1
 ---
 
-Four tools, each chosen to teach exactly one thing.
+Four tools, each chosen to teach exactly one thing. The choices are more
+deliberate than they look, and the reasoning transfers to whatever you build
+first.
 
 | Tool | What it teaches |
 |---|---|
 | `say_hello` | The simplest tool that can exist. One input, one sentence out. |
 | `roll_dice` | Optional inputs, defaults, and guard rails via `.min()` / `.max()`. |
 | `cookie_jar` | State that survives between calls — and a tool that politely says **no**. |
-| `secret_code` | Why tools beat guessing. Letter-shift maths an AI would fumble in its head. |
+| `secret_code` | Why tools beat guessing. Letter-shift maths a model would fumble. |
 
 Plus one resource, `cookiejar://status`, and one prompt, `bedtime_story`.
 
-## Why a dice roller is the perfect first tool
+## Part 1 · Why a dice roller is the perfect first tool
 
 This is the choice worth stealing, and the reason is not that dice are fun.
 
 <Callout type="lesson" title="The model cannot fake it">
   Ask a language model for a random number and it will hand you one. It will
-  say 7 far more often than chance allows, because it is pattern-matching, not
-  rolling. It has no source of randomness and no way to get one.
+  say 7 far more often than chance allows, because it is pattern-matching
+  against text, not rolling anything. It has no source of randomness and no way
+  to get one.
 
   So when your terminal prints `Rolled 3d20 -> [10, 4, 16]`, **you know the
   tool actually ran.** There is no other way those numbers could exist.
 </Callout>
 
-Compare that to a first tool like `get_weather` or `summarise_text`. The model
-can produce a plausible-looking answer to either one without calling anything,
-and you will spend an afternoon unsure whether your integration works or the
-model is being helpful.
+Compare that with a first tool like `get_weather` or `summarise_text`. The
+model can produce a plausible-looking answer to either without calling
+anything, and you will spend an afternoon unsure whether your integration works
+or the model is just being helpful.
 
-A first tool should be a thing the model **provably cannot do alone**. Dice
-qualify. So does anything that touches real state, which is why the cookie jar
-is second.
+<Callout type="insight" title="The general rule for a first integration">
+  Pick something the model **provably cannot do alone**, and whose output you
+  can verify at a glance.
 
-## `secret_code` — the same argument, sharper
+  Dice qualify. So does anything touching real, mutable state — which is why
+  the cookie jar is second, and why the two of them together make [the chaining
+  demo](/learn/host/a-while-loop) impossible to fake.
+</Callout>
 
-Letter-shift ciphers are the other kind of thing models are bad at: mechanical,
-per-character transformations that require tracking position and never
-drifting.
+## Part 2 · `say_hello` — the floor
+
+```ts
+server.registerTool(
+  "say_hello",
+  {
+    description: "Greet someone by name. Use when the user asks for a greeting.",
+    inputSchema: z.object({ name: z.string().min(1).max(60) }),
+  },
+  async ({ name }) => ({ content: [{ type: "text", text: `Hello, ${name}! 👋` }] }),
+);
+```
+
+One required input, one sentence out. It exists to establish the floor: this is
+the least a tool can be, and it is still a complete tool — it appears in
+`tools/list`, it gets validated, and the model picks it on description alone.
+
+It is also the block you copy when adding your own.
+
+## Part 3 · `roll_dice` — optional inputs and free guard rails
+
+```ts
+inputSchema: z.object({
+  sides: z.number().int().min(2).max(1000).default(6),
+  times: z.number().int().min(1).max(20).default(1),
+}),
+```
+
+Four things happen in those two lines, and only one of them is obvious.
+
+**`.default(6)`** means the model can say *"roll a die"* with no arguments at
+all, and your handler still receives a number. You never write `sides ?? 6`.
+
+**`.min(2)`** rejects a one-sided die **before your code runs**, with a message
+the model can read and correct.
+
+**`.max(20)` on `times`** is a seatbelt. Without it, *"roll a million dice"* is
+a legal request.
+
+**All four constraints appear in the JSON Schema the model reads.** So it knows
+not to ask for a thousand dice in the first place — the limits are
+documentation as well as enforcement.
+
+<Terminal>
+{`Input validation error: Invalid arguments for tool roll_dice:
+sides: Too small: expected number to be >=2`}
+</Terminal>
+
+You did not write a line of validation code.
+
+## Part 4 · `secret_code` — the same argument, sharper
+
+Letter-shift ciphers are the other kind of thing models are bad at:
+mechanical, per-character transformations that require tracking position across
+a whole string and never drifting.
 
 Ask a model to Caesar-shift a sentence by 3 in its head and it will get most of
 it right and quietly corrupt a couple of letters. Give it a tool and the answer
 is exact, every time.
 
 <Callout type="insight" title="This one also sets up project #2">
-  Project #2 connects **two** servers, and both of them have a tool called
+  Project #2 connects **two** servers, and both have a tool called
   `secret_code` — one does Caesar, one does Atbash.
 
-  That collision is deliberate, and it is how [One shelf, many
-  servers](/learn/host/the-toolbox) demonstrates why namespacing is not
-  optional.
+  That collision is deliberate. It is how [One shelf, many
+  servers](/learn/host/the-toolbox) demonstrates that namespacing is not
+  optional, and there is an eval that measures whether the model can tell the
+  two apart.
 </Callout>
 
-## `cookie_jar` — state, and a tool that says no
+## Part 5 · `cookie_jar` — state, and a tool that says no
 
-The cookie jar has four actions: `look`, `add`, `eat`, `refill`. It is the
-first tool with a *memory* — the count persists between calls — and the first
-one that can refuse.
+Four actions: `look`, `add`, `eat`, `refill`. It is the first tool with a
+**memory** — the count persists between calls — and the first one that can
+refuse.
+
+### The refusal
 
 Ask it to eat 500 cookies when there are 78 and it does not crash:
 
@@ -78,17 +139,41 @@ A sentence, not an exception. The model reads it, understands, and adapts:
   78 instead, or a smaller amount?`}
 </Terminal>
 
-Nobody wrote that recovery. It falls out of returning readable English.
+Nobody wrote that recovery. It falls out of returning readable English — and
+[the spec agrees](/learn/server/structured-results): tool *execution* errors
+should go back to the model precisely so it can self-correct, unlike protocol
+errors which it cannot fix.
 
-<Callout type="insight" title="And notice the shape of the arguments">
-  `cookie_jar { action: "eat" }` is dangerous. `cookie_jar { action: "look" }`
-  is not. **Same tool.**
+### And notice the shape of the arguments
 
-  Hold onto that. It is the entire argument of [Rules read arguments, not
-  names](/learn/gate/rules-read-arguments), two sections from now.
+<Callout type="lesson" title="`cookie_jar { action: 'eat' }` is dangerous. `cookie_jar { action: 'look' }` is not.">
+  **Same tool.** Same name. Same server. One reads a number; the other destroys
+  something that cannot be un-destroyed.
+
+  Hold onto that, because it is the entire argument of [Rules read arguments,
+  not names](/learn/gate/rules-read-arguments) two sections from now — and it
+  is not a quirk of cookie jars. `sql` is fine for `SELECT`. `github` is fine
+  for reading an issue. `stripe` is fine for fetching a customer.
+
+  **The verb lives in the arguments.**
 </Callout>
 
-## The resource and the prompt
+### And one action that sounds safe and isn't
+
+`refill` resets the jar to exactly 12. If the jar currently holds more than 12,
+**it silently destroys the difference.**
+
+<Callout type="warning" title="Dangerous is not the same as negative-sounding">
+  `refill` has a friendly name and *adds* cookies most of the time. It is on
+  project #3's gate list anyway.
+
+  Any operation that overwrites unbounded state with a fixed value can destroy
+  an arbitrary amount of it: `refill`, `reset`, `sync`, `restore from backup`,
+  `set quantity`. A gate built by scanning tool names for scary words catches
+  `smash_jar` and misses every one of those.
+</Callout>
+
+## Part 6 · The resource and the prompt
 
 One of each, mostly to show the shape:
 
@@ -98,24 +183,56 @@ One of each, mostly to show the shape:
 | 💬 prompt | `bedtime_story` — a fill-in-the-blank instruction taking a `hero` | the **human** picks it |
 
 Neither gets used again until project #5, which is its own small lesson: they
-were there from the very first project, sitting in the same file as the tools,
-and four projects went by without anybody reaching for them.
+were there from the very first project, in the same file as the tools, and four
+projects went by without anybody reaching for them.
 
 <Callout type="gotcha" title="A detail that only surfaced four projects later">
   When project #5 finally enumerated capabilities across every server it could
-  reach, **project #1's live deployment turned out to offer a resource and a
-  prompt nobody remembered writing** — and to negotiate the modern protocol era
-  as well.
+  reach, **project #1's live deployment turned out to be offering a resource
+  and a prompt nobody remembered writing** — and to negotiate the modern
+  protocol era.
 
   It had been advertising them, correctly, to anybody who asked, for the entire
   series. Nobody had ever asked.
 </Callout>
 
-## Adding your own
+## Part 7 · Adding your own
 
-The genuinely nice thing about this design: copy the `say_hello` block, rename
-it, and change the description. That is all it takes.
+Copy the `say_hello` block, rename it, change the description.
 
-The AI does not need to be told. Its next `tools/list` picks the new tool up,
-reads your description, and starts using it when your description convinces it
-to.
+```ts
+server.registerTool(
+  "shout",
+  {
+    description:
+      "Convert a sentence to upper case with an exclamation mark. Use when the " +
+      "user asks for something to be shouted or emphasised.",
+    inputSchema: z.object({ text: z.string().min(1).max(200) }),
+  },
+  async ({ text }) => ({ content: [{ type: "text", text: `${text.toUpperCase()}!` }] }),
+);
+```
+
+Push it.
+
+<Checkpoint>
+  You do **not** tell the model about the new tool. On its next `tools/list` it
+  picks the tool up, reads your description, and starts using it when your
+  description convinces it to.
+
+  Adding a capability is a deploy, not an integration. That is the payoff of
+  having a protocol at all.
+</Checkpoint>
+
+## What you now know
+
+- A first tool should be something the model **provably cannot fake**, with
+  output you can verify at a glance.
+- `.default()` fills arguments before your handler runs; `.min()`/`.max()` are
+  free validation **and** documentation the model reads.
+- Refuse with a **sentence**, and the model recovers without you writing
+  recovery logic.
+- The same tool can be safe or dangerous depending on its **arguments** — the
+  verb is not in the name.
+- Friendly-sounding operations that overwrite unbounded state are among the
+  most destructive things in a toolbox.

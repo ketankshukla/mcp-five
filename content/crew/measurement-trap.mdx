@@ -5,10 +5,12 @@ summary: "Every individual number was right. The division was the lie — and it
 project: 4
 ---
 
-This is the most useful page in this section, and it is about a bug in a
-number rather than a bug in code.
+This is the most useful page in this section, and it is not about agents at
+all. It is about a bug in a **number**.
 
-## What the README originally said
+If you take one thing from project #4, take this rather than sub-agents.
+
+## Part 1 · What the README originally said
 
 <Callout type="quote">
   The crew costs 1.7× more at 60 jars — delegation is pure overhead at this
@@ -16,51 +18,79 @@ number rather than a bug in code.
 </Callout>
 
 Confident. Specific. Backed by a script that printed real token counts from
-real runs. Written up, published, and believed.
+real runs against a real API. Written up, published, and believed.
 
 **Both the number and the conclusion were wrong.**
 
-## Where 1.7× came from
+## Part 2 · Where 1.7× came from
 
 The script divided one mode's **total token spend** by the other's.
 
-```text
-crew total tokens  ÷  single-agent total tokens  =  1.7
+```ts
+// ❌ what it did
+const ratio = crew.usage.total / single.usage.total;
 ```
 
-Which would be fine if both modes had done the same amount of work. They had
-not.
+Which would be fine if both modes had done the same amount of work.
 
-<Callout type="gotcha" title="crew-one-approval is a delegation-only case">
-  Two of the eval cases only exist in crew mode — you cannot measure "the crew
-  brings every destructive call to one approval" with delegation switched off.
+They had not.
 
-  So a 3-attempt comparison is **3 runs in single mode and 6 in crew mode.**
+### The eval suite is not symmetric
 
+Some cases only exist in crew mode. You cannot measure *"the crew brings every
+destructive call to one approval"* with delegation switched off — there is no
+crew to bring anything.
+
+| Case | single mode | crew mode |
+|---|---|---|
+| `pantry-sweep` | ✅ runs | ✅ runs |
+| `pantry-no-overkill` | ✅ runs | ✅ runs |
+| `crew-delegates` | ❌ n/a | ✅ runs |
+| `crew-one-approval` | ❌ n/a | ✅ runs |
+
+<Callout type="gotcha" title="So a 3-attempt comparison is 3 runs in single mode and 6 in crew mode">
   Part of what "1.7×" measured was *"the crew did twice as many runs."*
+
+  The ratio was answering a question nobody asked: **"how many tokens did each
+  mode's whole test suite consume?"** — when the question people read it as was
+  *"is delegation more expensive per unit of work?"*
 </Callout>
 
-## Every individual figure was accurate
+## Part 3 · Why it survived review
 
-This is the part worth sitting with.
+This is the part worth sitting with, because it is what makes this class of bug
+dangerous rather than merely annoying.
 
 Nothing in that report was fabricated, rounded badly, or misread. Every token
 count came from a real API response. Every run genuinely happened. Every row in
-the table was correct.
+the table was correct. The arithmetic was correct.
 
 <Callout type="quote">
   Every individual number was right. The division was the lie.
 </Callout>
 
-Which is exactly why it survived review. There is nothing to catch by
-double-checking the numbers — the numbers are fine. The error lives in the
-relationship between two of them, and that relationship is not written down
-anywhere on the page.
+There is nothing to catch by double-checking the numbers, because the numbers
+are fine. **The error lives in the relationship between two of them**, and that
+relationship is not written down anywhere on the page.
 
-## The fix, and the corrected result
+<Callout type="lesson" title="A ratio is a claim about two populations, and it carries none of the evidence">
+  `1.7` is four characters. It does not tell you what was in the numerator, what
+  was in the denominator, or whether they were comparable.
+
+  Every other figure in that report was auditable at a glance. The one figure
+  that could not be audited at a glance is the one that was wrong — and it is
+  the one that got quoted.
+</Callout>
+
+## Part 4 · The fix, and the corrected result
 
 Track tokens **per observation group**, and compare only the groups that both
 modes actually executed.
+
+```ts
+const sharedGroups = [...single.usageByGroup.keys()]
+  .filter((k) => crew.usageByGroup.has(k));
+```
 
 <Terminal title="npm run compare — with the header that says why">
 {`  case                   ONE AGENT     A CREW
@@ -80,55 +110,124 @@ modes actually executed.
   <Stat value="2.01× → 1.08×" label="project #5 re-measured it again" note="the same bug, still live" tone="warn" />
 </StatGrid>
 
-Note the header on that cost block — *on the run type(s) BOTH modes did*. It
-says that because the first version didn't, and a header that states the
-denominator is the cheapest possible defence against this entire class of
-mistake.
+Note the header on that cost block — ***on the run type(s) BOTH modes did***.
 
-<Callout type="lesson" title="Any comparison between two configurations has to check that they did the same work, not just that they both ran">
-  This is an A/B test with unequal traffic. It is one of the oldest measurement
-  errors there is, and it arrives in agent work wearing an unfamiliar costume:
-  *some eval cases only make sense in one mode.*
+<Callout type="insight" title="That header is the cheapest possible defence against this entire class of mistake">
+  It states the denominator **in the output**, where the number is read, rather
+  than in a comment nobody opens.
 
-  The moment your two arms of a comparison have different case lists, your
-  totals are not comparable and no amount of care about the individual numbers
-  will save you.
+  The full spend is still printed too, clearly labelled as such — because it is
+  what the run really cost you. It just is not the number that answers the
+  question.
 </Callout>
 
-## And then the sting
+## Part 5 · The general shape
 
-Project #4 documented this. Wrote the gotcha, explained the fix, built
-`usageByGroup` to do it properly, and corrected the README table.
+<Callout type="quote">
+  Any comparison between two configurations has to check that they did the same
+  work, not just that they both ran.
+</Callout>
 
-**And never wired `usageByGroup` up to the headline ratio.**
+This is an **A/B test with unequal traffic**, which is one of the oldest
+measurement errors there is. It arrives in agent work wearing an unfamiliar
+costume: *some eval cases only make sense in one mode.*
 
-Project #5 caught it, still live, in `scripts/08-compare.ts` — the same
-division, in the same script, in the project whose own appendix explains why it
-is wrong. Fixed there: **2.01× became 1.08×**, which agrees with the corrected
-table.
+Once you know the shape, you start seeing it:
+
+| Situation | The unequal thing |
+|---|---|
+| comparing two prompts | one triggered more retries |
+| comparing two models | one hit `max_tokens` and got truncated |
+| comparing cached vs uncached | [`input_tokens` means different things](/learn/host/the-meter) |
+| comparing before/after a refactor | the test suite grew |
+| comparing two servers | one returned `resource_link`s and the other inlined |
+
+<Callout type="lesson" title="The moment your two arms have different case lists, your totals are not comparable">
+  And no amount of care about the individual numbers will save you, because the
+  individual numbers are not where the error is.
+</Callout>
+
+## Part 6 · And then the sting
+
+Project #4 **documented this**. Wrote the gotcha. Explained the fix. Built
+`usageByGroup` to do it properly. Corrected the README table.
+
+And never wired `usageByGroup` up to the headline ratio.
+
+`usageByGroup` was populated on line 185 and stored on the results object. The
+verdict on line 313 read `results[n].usage` — the raw totals — ignoring it
+entirely.
+
+Project #5 caught it, still live, in `scripts/08-compare.ts`. The script had
+never been run in that repo. Run once, it reported:
+
+<Terminal>
+{`  ANSWER QUALITY : one agent 100%   vs   crew 100%   (+0 points)
+  COST           : the crew cost 2.01x what one agent cost
+  → Same answer, 2.01x the price. At 60 jars delegation is pure overhead.`}
+</Terminal>
+
+A conclusion project #4's own corrected README already contradicts. Fixed
+there: **2.01× became 1.08×**.
 
 <Callout type="warning" title="A documented bug is not a fixed bug">
-  The fix existed. It was written, tested, and committed. It just was not
-  called from the place that mattered, and the place that mattered kept
-  printing a confident number.
+  The appendix entry, the code comment, and the helper data structure all
+  existed — and all described a behaviour the program **did not have**.
 
   There is a specific failure mode here worth naming: **writing up a mistake
   feels like resolving it.** The appendix entry gave the bug a headstone while
   it was still walking around.
 </Callout>
 
-## What to actually do about it
+<Callout type="quote">
+  The only evidence that a fix works is the output of the fixed program.
+</Callout>
 
-Three habits, all cheap:
+Writing *"which turns 1.87× into 0.84×"* without re-running is how a corrected
+bug stays shipped.
 
-**Print the denominator.** Not "1.7×" but "1.7× — 6 crew runs vs 3 single
-runs". A ratio without its inputs is an assertion.
+## Part 7 · Three habits, all cheap
 
-**Make the comparison refuse rather than guess.** If the two arms did not run
-the same cases, the right output is *"cannot compare: crew ran 2 cases single
-mode did not"*, not a number with a caveat somewhere below it.
+<Steps>
+  <Step n={1} title="Print the denominator next to the ratio">
+    Not `1.7×` but `1.7× — 6 crew runs vs 3 single runs`.
 
-**Re-run the check against the code, not the changelog.** The only reason
-project #5 found this was that it went and looked at what
-`scripts/08-compare.ts` actually did, rather than reading project #4's appendix
-and believing it.
+    A ratio without its inputs is an assertion. With them, it is a
+    self-auditing figure — and this one would have been caught by whoever read
+    it first.
+  </Step>
+
+  <Step n={2} title="Make the comparison refuse rather than guess">
+    If the two arms did not run the same cases, the right output is:
+
+    ```text
+    cannot compare: crew ran 2 cases single mode did not
+    ```
+
+    …not a number with a caveat somewhere below it. **A tool that cannot
+    produce a misleading number is better than one that produces a caveated
+    one**, because the caveat gets dropped when the number gets quoted.
+  </Step>
+
+  <Step n={3} title="Re-run the check against the code, not the changelog">
+    The only reason project #5 found this is that it went and looked at what
+    `scripts/08-compare.ts` actually **did**, rather than reading project #4's
+    appendix and believing it.
+
+    Inheriting a script is inheriting a claim. Run it once before you trust it.
+  </Step>
+</Steps>
+
+## What you now know
+
+- The headline said **1.7×** and was wrong, because the two modes ran different
+  numbers of runs.
+- Every individual number was accurate — **the division was the lie**, which is
+  why review did not catch it.
+- The fix is to compare only **shared observation groups**, and to print the
+  denominator in the output.
+- This is an A/B test with unequal traffic, and the same shape appears whenever
+  two arms of a comparison do different amounts of work.
+- **A documented fix is not a fix.** Project #4's correction existed in prose,
+  in a comment and in a data structure, and never in the code path that
+  printed the number.
