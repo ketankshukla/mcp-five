@@ -4,12 +4,194 @@ emoji: "🔌"
 summary: "A brain in a jar, a list taped to a toy box, and why 10 × 10 became 10 + 10."
 ---
 
-## Coming in a later milestone
+## An AI is a brain in a jar
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/start/what-is-mcp.mdx`.
+It is very smart, and it is completely stuck.
 
-### What will be here
+It can *think* about your files. It can't *open* them. It can *talk* about
+rolling dice. It can't actually roll one — ask it for a random number and it
+will pick 7 far more often than chance allows, because it is pattern-matching,
+not rolling.
 
-A brain in a jar, a list taped to a toy box, and why 10 × 10 became 10 + 10.
+Your code is the opposite problem. It has hands and no idea what you want.
+
+<Diagram
+  caption="The AI knows a lot and has no hands. Your code can touch anything and knows nothing about you. Before MCP there was no agreed way across."
+>
+{`flowchart LR
+    AI["🧠 <b>The AI</b><br/>✅ knows a lot<br/>❌ has no hands"]
+    GAP["🚧 <b>the gap</b><br/>no agreed way<br/>to reach across"]
+    CODE["🧰 <b>Your code</b><br/>✅ can touch anything<br/>❌ knows nothing about you"]
+
+    AI -.->|"wants to"| GAP
+    GAP -.->|"can't"| CODE
+
+    style AI fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc
+    style CODE fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc
+    style GAP fill:#450a0a,stroke:#ef4444,stroke-width:2px,stroke-dasharray: 6 4,color:#fecaca`}
+</Diagram>
+
+## The fix is a list taped to a box
+
+Picture a toy box. The AI can't see inside it. So you tape a list to the
+outside:
+
+```text
+Inside this box:
+  🎲 1 dice          — for when you need real randomness
+  🍪 1 cookie jar    — for counting cookies
+  🔐 1 decoder ring  — for secret messages
+```
+
+The AI reads the list, points at one, and says *"use that one, please, with
+these settings."* You reach in, use it, and hand back the result.
+
+**MCP is the agreed-upon shape of that message.** That is the whole thing. The
+rest is details.
+
+<Callout type="lesson">
+  The AI never sees inside your box. It reads a list of what's in there,
+  picks one, and gets a result back. How the thing works — a database, an API,
+  a variable in memory — is entirely your business.
+</Callout>
+
+## Why a *standard* is the load-bearing word
+
+"Protocol" sounds like the boring part. It is the entire value.
+
+Before MCP, connecting 10 AI apps to 10 services meant writing **100** custom
+integrations — every app against every service, each one bespoke, each one
+breaking on its own schedule.
+
+With MCP it is **10 + 10 = 20**. Each app learns MCP once. Each service speaks
+MCP once. Everything plugs into everything.
+
+<Diagram
+  caption="Without a standard, every app needs a bespoke integration for every service. With one, each side learns the protocol once. Three by three is nine versus six; ten by ten is a hundred versus twenty."
+>
+{`flowchart TB
+    subgraph AFTER["✅ With MCP — 3 + 3 = 6 connections"]
+        direction TB
+        B1["Claude"] --- HUB{{"MCP"}}
+        B2["Cursor"] --- HUB
+        B3["ChatGPT"] --- HUB
+        HUB --- B4["GitHub"]
+        HUB --- B5["Postgres"]
+        HUB --- B6["Your app"]
+    end
+
+    subgraph BEFORE["❌ Without MCP — 3 × 3 = 9 custom integrations"]
+        direction TB
+        A1["Claude"] --- A4["GitHub"]
+        A1 --- A5["Postgres"]
+        A1 --- A6["Your app"]
+        A2["Cursor"] --- A4
+        A2 --- A5
+        A2 --- A6
+        A3["ChatGPT"] --- A4
+        A3 --- A5
+        A3 --- A6
+    end
+
+    style BEFORE fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style AFTER fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style HUB fill:#78350f,stroke:#fbbf24,color:#fef3c7`}
+</Diagram>
+
+It is USB-C for AI. One shape of plug.
+
+## Three words you need, defined plainly
+
+These get used interchangeably everywhere and they are not interchangeable.
+The distinction is the spine of this whole course, because **projects #1 and
+#2 are these two things**, and everything after is a consequence.
+
+| Word | What it is | In this course |
+|---|---|---|
+| **Server** | Offers tools. Waits. Never initiates. | Project #1 builds one |
+| **Client** | Speaks to exactly one server. | Hand-written, ~200 lines of `fetch` |
+| **Host** | Owns the conversation with the model, wrangles *several* servers, runs the loop. | Project #2 builds one |
+
+Every AI product you admire — Claude Code, Cursor, ChatGPT with plugins — is a
+variation on that third box.
+
+<Diagram
+  title="D2 · where everything sits"
+  caption="The host is the only thing talking to the model. Servers offer tools and wait; a client speaks to one server; the host wrangles several and owns the loop. The model itself never touches a server."
+>
+{`flowchart LR
+    USER["🧑 you"]
+
+    subgraph HOSTBOX["🎛️ the HOST — your app"]
+        direction TB
+        LOOP["🔁 the loop<br/><i>decides what happens next</i>"]
+        C1["🔌 client"]
+        C2["🔌 client"]
+        LOOP --- C1
+        LOOP --- C2
+    end
+
+    MODEL["🧠 the model<br/><i>picks tools, writes text.<br/>talks to nothing else.</i>"]
+    S1["🧰 server A<br/><i>🎲 dice, 🍪 jar</i>"]
+    S2["🧰 server B<br/><i>🔐 cipher</i>"]
+
+    USER -->|"plain English"| LOOP
+    LOOP <-->|"messages + tool list"| MODEL
+    C1 -->|"tools/call"| S1
+    C2 -->|"tools/call"| S2
+    LOOP -->|"the answer"| USER
+
+    style HOSTBOX fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style LOOP fill:#7f1d1d,stroke:#ef4444,stroke-width:3px,color:#fecaca
+    style MODEL fill:#2e1065,stroke:#a78bfa,color:#ede9fe
+    style S1 fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style S2 fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style USER fill:#1e293b,stroke:#38bdf8,color:#f8fafc`}
+</Diagram>
+
+Notice what the model is *not* connected to. It never reaches a server. It
+reads a list and says which one it wants; the host does the reaching. That gap
+is where projects #3, #4 and #5 all live.
+
+## Six ordinary HTTP POSTs
+
+There is no magic in here. A whole MCP conversation is six messages carrying
+JSON.
+
+| # | What happens | The actual message |
+|---|---|---|
+| 1 | **The AI knocks.** Which version do you speak? | `initialize` |
+| 2 | **The AI reads the list.** Every tool's name, description and inputs. | `tools/list` |
+| 3 | **You ask for something.** "Roll me three d20s." | *(plain English, no MCP yet)* |
+| 4 | **The AI points at a toy.** It matched your sentence to a description. | `tools/call` |
+| 5 | **Your code runs.** On your server, with your data. | *(just JavaScript)* |
+| 6 | **The answer comes home.** | *(the response)* |
+
+And every one of them is wrapped in a boring envelope called JSON-RPC 2.0:
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "roll_dice", "arguments": { "sides": 20, "times": 3 } } }
+```
+
+That's it. That's the protocol you were nervous about.
+
+## What a server can offer
+
+Almost everybody only ever builds **tools**. There are five capabilities, and
+the other four matter because they answer a question tools can't: *who gets to
+decide?*
+
+| Capability | What it is | Who decides |
+|---|---|---|
+| 🔧 **tools** | A verb. Something to **do**. | the **model** |
+| 📄 **resources** | A noun. Something to **read**, addressed by URI. | the **host** |
+| 💬 **prompts** | A saved fill-in-the-blank instruction. | the **human** |
+| 🧠 **sampling** | The server asks **your host** to run a model call. | the **server** asks; the host decides |
+| 🙋 **elicitation** | The server asks **your user** a question. | the **server** asks; the user answers |
+
+<Callout type="insight" title="A number worth carrying into the next four sections">
+  Four projects into a series named after this protocol, **only `tools` had
+  ever been used.** The other four all arrive at once, in project #5. The
+  reason that is interesting is on the next page.
+</Callout>

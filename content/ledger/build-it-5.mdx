@@ -5,12 +5,249 @@ summary: "The stages, their checkpoints, and the whole demo in three commands."
 project: 5
 ---
 
-## Coming in a later milestone
+This project **extends [project #4](/learn/crew/the-ceiling)** rather than
+starting fresh. You copy its `lib/` wholesale and teach its hand-written MCP
+client the other half of the protocol. If you haven't built #4, build that
+first — the loop, the crew, the gate and the notebook are all load-bearing
+here.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/ledger/build-it-5.mdx`.
+<Steps>
+  <Step n={0} title="Five minutes that save you a day">
+    Before designing anything, find out what you can actually reach.
 
-### What will be here
+    ```bash
+    for u in "https://learn-mcp-agent-crew.vercel.app/api/pantry" \
+             "https://learn-mcp-5-year-old.vercel.app/api/mcp" \
+             "https://learn-mcp-agent-guard.vercel.app/api/jar"; do
+      echo -n "$u -> "
+      curl -s -o /dev/null -w "%{http_code}\n" -X POST "$u" \
+        -H 'Content-Type: application/json' \
+        -H 'Accept: application/json, text/event-stream' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}'
+    done
+    ```
 
-The stages, their checkpoints, and the whole demo in three commands.
+    <Checkpoint>
+      And this time the news is good:
+
+      <Terminal>
+      {`https://learn-mcp-agent-crew.vercel.app/api/pantry     -> 200   open
+https://learn-mcp-5-year-old.vercel.app/api/mcp        -> 200   open
+https://learn-mcp-agent-guard.vercel.app/api/jar       -> 401   locked`}
+      </Terminal>
+    </Checkpoint>
+
+    Projects #2 and #3 locked their servers and it broke the next project both
+    times. **Project #4 shipped its servers deliberately open, and the decision
+    paid off here.** Ship yours open too.
+  </Step>
+
+  <Step n={1} title="Scaffold, and inherit">
+    `create-next-app` refuses to scaffold into a folder containing *any*
+    unrecognised file — and yours already has the kickoff document in it.
+
+    ```bash
+    npx create-next-app@latest /tmp/scaffold --typescript --app --tailwind \
+      --no-src-dir --use-npm --turbopack --eslint --skip-install
+    rm -rf /tmp/scaffold/.git
+    cp -r /tmp/scaffold/. ./
+
+    git clone --depth 1 https://github.com/ketankshukla/learn-mcp-agent-crew.git /tmp/p4
+    cp -r /tmp/p4/lib /tmp/p4/scripts .
+    cp -r /tmp/p4/app/api app/
+    ```
+
+    <Callout type="gotcha">
+      `mcp-handler` peer-depends on **`@modelcontextprotocol/server`**, not
+      `@modelcontextprotocol/sdk`. The names are close enough that npm installs
+      the wrong one without complaint.
+    </Callout>
+
+    <Checkpoint>
+      `npx tsc --noEmit` exits 0 on a clean clone.
+    </Checkpoint>
+  </Step>
+
+  <Step n={2} title="Verify the APIs from the types on disk">
+    **This is the stage that matters.** It changed the design in all five
+    projects, and this time it changed it most — the whole of
+    [The finding](/learn/ledger/the-finding) is this stage.
+
+    Short version: the types say `createMessage()` exists, everything is marked
+    `@deprecated`, `LATEST_PROTOCOL_VERSION` does not contain the latest
+    protocol version, and the only thing that settles it is writing a throwaway
+    server and curling it.
+
+    <Checkpoint>
+      The full round trip returns `"resultType":"complete"`.
+    </Checkpoint>
+  </Step>
+
+  <Step n={3} title="The $0 eval runner, FIRST">
+    Project #4's `NEXT_STEP.md` said to build this before anything else. Do
+    that — see [The suite that costs nothing](/learn/ledger/zero-dollar-evals).
+
+    <Checkpoint>
+      On a fresh database it is *supposed* to say this:
+
+      <Terminal>
+      {`  NOTHING TO SCORE. No stored run matched any case's prompt.
+  This is not a failure — it means the tapes don't exist yet.`}
+      </Terminal>
+    </Checkpoint>
+
+    <Callout type="warning">
+      That checkpoint is honest and it also hid a bug for a while. A broken
+      recording path produces exactly the same reassuring sentence as an empty
+      database.
+    </Callout>
+  </Step>
+
+  <Step n={4} title="The ledger schema">
+    Three tables and one column — `ledger_entries`, `server_ceilings`,
+    `spend_grants`, and `runs.mode`. The shapes and the two decisions worth
+    defending are on [One wallet, many spenders](/learn/ledger/one-wallet).
+
+    ```bash
+    npx vercel install neon && npx vercel env pull .env.local
+    npm run db:init
+    ```
+
+    <Checkpoint>
+      14 tables listed, including `ledger_entries`, `server_ceilings` and
+      `spend_grants`.
+    </Checkpoint>
+  </Step>
+
+  <Step n={5} title="The read-only half">
+    `resources/list`, `resources/read`, `prompts/list`, `prompts/get`. All four
+    are ordinary request/response — the same shape as `tools/call`.
+
+    ```bash
+    npm run readonly
+    ```
+
+    <Checkpoint>
+      Both servers report an era, and the era column is load-bearing: a server
+      on the legacy era **cannot** ask your host to think.
+    </Checkpoint>
+  </Step>
+
+  <Step n={6} title="The server that asks">
+    Read the tool handler as **two passes of the same function**, because that
+    is what multi-round-trip means:
+
+    ```ts
+    async ({ focus, depth }, ctx) => {
+      const view = inputResponse(ctx?.mcpReq?.inputResponses, "summary");
+      const answer = view.kind === "sampling" ? view.result : undefined;
+
+      if (answer) return say(formatDigest(answer));      // PASS 2: the host answered
+
+      return inputRequired({                              // PASS 1: ask
+        requestState: await stateCodec.mint({ }),
+        inputRequests: { summary: inputRequired.createMessage({ }) },
+      });
+    }
+    ```
+
+    Two details that are cheap to add and expensive to skip: **sign the
+    `requestState`**, and **give the tool a cost dial**. Without
+    `depth: "brief" | "deep"` you cannot demonstrate a gate that reasons about
+    amount, because everything the server asks for costs the same.
+
+    <Checkpoint>
+      `npm run sampling` returns a digest attributed to your host's model.
+    </Checkpoint>
+  </Step>
+
+  <Step n={7} title="The spend gate">
+    `lib/spend-gate.ts` is `lib/approval.ts`'s sibling and deliberately the
+    same shape. The two differences carry the lesson — see
+    [A budget is not a gate](/learn/ledger/budget-not-gate).
+
+    ```bash
+    npm run ledger -- --ceiling kitchen 2
+    npm run sampling -- --deep
+    ```
+
+    <Checkpoint>
+      The whole project in three lines:
+
+      <Terminal>
+      {`🛑 The Kitchen → summarise_week [claude-sonnet-5] 6.0¢ estimated — REFUSED, $0.00 spent
+  tokens on the tab   : 0
+  refused (not spent) : 6.0¢  ← what the ceiling saved you`}
+      </Terminal>
+    </Checkpoint>
+  </Step>
+
+  <Step n={8} title="Wire it into the loop">
+    The handler is built **inside** the tool-running block of `runAgentLoop`,
+    and that placement is not arbitrary — it needs `emit`. A server's sampling
+    request happens *inside* a tool call, and project #4's `createEventQueue`
+    is the only thing that can get an event out of a callback and into an async
+    generator's `yield`.
+
+    Those twenty lines earn their keep a second time, for a completely
+    unrelated feature.
+
+    <Checkpoint>
+      `npm run evals -- --case gate-refuses-expensive --attempts 1` passes — so
+      the gate fires **through the agent loop**, not just in the direct script.
+    </Checkpoint>
+  </Step>
+
+  <Step n={9} title="The UI, and the dial">
+    Two decisions. **Two numbers, not one** — "spent" and "refused by the
+    ceiling", side by side, because the second is what the gate is earning and
+    it is invisible if you only render the first.
+
+    And **the dial is real**: you can set a ceiling and grant an allowance from
+    the page. A demo that needs a redeploy to change a number is a screenshot.
+  </Step>
+
+  <Step n={10} title="Verify and ship">
+    ```bash
+    npx tsc --noEmit && npx eslint . && npm run build
+    git add -n .env.example    # check-ignore lies about negations; this doesn't
+    gh repo create learn-mcp-agent-ledger --public --source=. --remote=origin --push
+    ```
+
+    <Callout type="lesson">
+      Then set the secrets, redeploy, and **exercise the actual feature on the
+      deployed URL** — a real sampling request and a real refusal.
+
+      "It deployed and the page loads" is not verification.
+    </Callout>
+  </Step>
+</Steps>
+
+## The demo, in three commands
+
+```bash
+npm run ledger -- --ceiling kitchen 2     # two cents per request
+npm run sampling -- --deep                # 🛑 your host tells your own server no
+npm run ledger -- --grant kitchen 8       # a human says "yes, this once"
+npm run sampling -- --deep                # …and now it goes through
+```
+
+## What the whole project cost
+
+<StatGrid>
+  <Stat value="≈$3.00" label="of API credit, for the entire project" note="~730k tokens" />
+  <Stat value="$0.00" label="to re-run the regression suite" note="13/13, from stored traces" tone="ok" />
+  <Stat value="4" label="commands that cost nothing at all" note="evals:replay · readonly · ledger · mcp:list" tone="ok" />
+</StatGrid>
+
+The first four checkpoints cost nothing:
+
+```bash
+npm run evals:replay     # THE $0 SUITE — scores runs you already paid for
+npm run readonly         # resources + prompts, no model calls
+npm run ledger           # who spent what
+npm run mcp:list         # transport — 4 servers, no AI
+
+npm run sampling         # A SERVER ASKS YOU TO THINK — about 0.1¢
+npm run sampling -- --deep   # …and gets REFUSED, for $0.00
+```

@@ -5,12 +5,134 @@ summary: "You cannot make somebody else's server wait for your human. Synchronou
 project: 5
 ---
 
-## Coming in a later milestone
+This is the part that took longest to get right, and the answer is a genuine
+limitation rather than a clever trick. It is worth stating plainly instead of
+hiding, because pretending otherwise produces a demo that hangs.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/ledger/gate-cannot-pause.mdx`.
+## Why project #3's answer doesn't transfer
 
-### What will be here
+Project #3's gate **pauses**, and the mechanism is lovely. The loop stops. The
+HTTP request ends. The entire agent — its whole `messages` array — is written
+to Postgres. You close your laptop. A brand-new request, possibly on a
+different machine, thaws it out five minutes later and carries on.
 
-You cannot make somebody else's server wait for your human. Synchronous refusal, asynchronous approval.
+That works because **the thing being frozen is yours.** Your agent does not
+mind waiting. It isn't waiting; it doesn't exist. It is a row.
+
+A sampling request is not yours.
+
+<Callout type="gotcha" title="Somebody else's server is sitting inside a tools/call">
+  It is holding a request open, waiting for an answer, and it will time out in
+  under a minute.
+
+  Freezing it does not pause it. It **deadlocks** it.
+</Callout>
+
+You cannot write somebody else's server to Postgres. You do not have it. All
+you have is an open HTTP request that is going to expire whether or not your
+human has looked at their screen.
+
+## Synchronous refusal, asynchronous approval
+
+So the gate is shaped differently on purpose:
+
+| | |
+|---|---|
+| **the refusal** | immediate, and free |
+| **the human's answer** | a card, minutes later, granting a one-shot allowance |
+| **when it takes effect** | the agent's **next attempt** |
+
+<Diagram
+  title="D10 · the spend gate decision flow"
+  caption="Under the ceiling, it runs and lands on the ledger. Over it, the host refuses synchronously for $0.00 — and writes a ledger row anyway. The human's grant is spent by a later attempt, not by the request that was refused."
+>
+{`flowchart TB
+    START(["🧰 kitchen asks for a model call<br/><b>estimated 6.0¢</b>"]) --> GATE{"💰 over the<br/>ceiling?"}
+
+    GATE -->|"no — 0.22¢ ≤ 2¢"| RUN["🧠 run the model<br/><i>on the host's key</i>"]
+    RUN --> TAB["🏦 add to the shared TreeBudget<br/>📓 write a ledger row<br/><i>tagged with WHO asked</i>"]
+    TAB --> BACK(["✅ answer returned to the server"])
+
+    GATE -->|"yes — 6.0¢ > 2¢"| NO["🛑 REFUSE, synchronously<br/><b>$0.00 spent</b><br/><i>no model was contacted</i>"]
+    NO --> TELL["📓 write a ledger row anyway<br/><i>a refusal that leaves no trace is<br/>indistinguishable from a gate<br/>that is switched off</i>"]
+    TELL --> CARD["🧑 a card appears for the human"]
+    CARD --> GRANT{"grant a<br/>one-shot<br/>allowance?"}
+    GRANT -->|"yes"| NEXT(["⏭ spent by the agent's NEXT attempt"])
+    GRANT -->|"no"| DONE(["🚫 the server is told, plainly,<br/>what it may do instead"])
+
+    style START fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style GATE fill:#78350f,stroke:#fbbf24,stroke-width:3px,color:#fef3c7
+    style NO fill:#7f1d1d,stroke:#ef4444,stroke-width:3px,color:#fecaca
+    style TELL fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style CARD fill:#78350f,stroke:#fbbf24,color:#fef3c7
+    style RUN fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style TAB fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe
+    style BACK fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style NEXT fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style DONE fill:#1e293b,stroke:#64748b,color:#f8fafc`}
+</Diagram>
+
+Note where the grant is checked: **after** the ceiling, not before. A grant is
+only ever spent on a call that actually needed it, so it can't be quietly
+consumed by the next cheap request that happens along.
+
+## The refusal costs nothing, and that is the whole argument
+
+<Terminal title="npm run sampling -- --deep">
+{`🛑 The Kitchen → summarise_week  [claude-sonnet-5]  6.0¢ estimated — REFUSED, $0.00 spent
+
+  tokens on the tab   : 0
+  refused (not spent) : 6.0¢  ← what the ceiling saved you`}
+</Terminal>
+
+Your own server asked your own host to spend your money, and your host said no,
+for free.
+
+## The wording is doing real work
+
+This is project #3's deny-branch lesson, one network hop further out — and it
+cost real money to learn the first time.
+
+Say only *"denied"* and the server's own model very reasonably retries the
+identical call. Which gets denied again. And **each retry costs the agent
+another full round trip**, because that is how multi-round-trip works. A bad
+sentence is a bill.
+
+So the refusal text names the price, names the ceiling, and says what would
+actually help:
+
+<Callout type="quote">
+  REFUSED BY THE HOST'S SPEND GATE. This request is estimated at 6.0¢, which is
+  over the 2.0¢ ceiling configured for the server "kitchen". No model call was
+  made and nothing was charged. Do not retry this request unchanged — either
+  ask for a smaller maxTokens, send less text, or proceed without the model's
+  help and say plainly what you could not do.
+</Callout>
+
+Three things in there, each load-bearing: **what it cost**, **what the limit
+was**, and **three specific alternatives**. A refusal that only refuses turns
+into a loop.
+
+## The demo, in three commands
+
+```bash
+npm run ledger -- --ceiling kitchen 2     # two cents per request
+npm run sampling -- --deep                # 🛑 your host tells your own server no
+npm run ledger -- --grant kitchen 8       # a human says "yes, this once"
+npm run sampling -- --deep                # …and now it goes through
+```
+
+<Checkpoint>
+  The third command writes a grant. The fourth spends it — and the ledger ends
+  up with a refused row *and* an allowed row for the same request, which is
+  exactly the history you want when somebody asks later why that 6¢ was spent.
+</Checkpoint>
+
+<Callout type="lesson" title="State the constraint, don't design around it">
+  You cannot make somebody else's server wait for your human. That is a
+  property of the boundary, not a gap in the implementation.
+
+  The design that admits it is uglier on a slide and works in production. The
+  design that hides it is a demo that hangs on exactly the decisions people
+  think hardest about.
+</Callout>

@@ -79,8 +79,16 @@ export function Diagram({ title, caption, children }: Props) {
           fontFamily: "Inter, sans-serif",
           fontSize: "16px",
         },
-        flowchart: { curve: "basis", padding: 16, useMaxWidth: true },
-        sequence: { actorMargin: 60, mirrorActors: false, useMaxWidth: true },
+        // useMaxWidth: false is deliberate and load-bearing.
+        //
+        // With it on, Mermaid scales a diagram down to its container's width.
+        // A five-node left-to-right flowchart with real labels is ~2000px
+        // wide, so in a 583px column it renders 43px tall — present, correct,
+        // and completely unreadable. The container below has overflow-x, so
+        // the right answer is to let the diagram be its natural size and
+        // scroll inside its own box.
+        flowchart: { curve: "basis", padding: 16, useMaxWidth: false },
+        sequence: { actorMargin: 60, mirrorActors: false, useMaxWidth: false },
       });
 
       try {

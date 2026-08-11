@@ -4,12 +4,89 @@ emoji: "🧭"
 summary: "Read in order. Every project is live. Every claim here has a number behind it."
 ---
 
-## Coming in a later milestone
+## Read it in order
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/start/how-to-use.mdx`.
+The sidebar is the order. It crosses section boundaries, and every page has a
+prev/next pager at the bottom, so you can start at the first page and finish
+at the last without ever choosing what to read next.
 
-### What will be here
+You *can* jump. Section 6 is a reference and stands alone. But sections 1
+through 5 are a sequence — each one opens by breaking something the previous
+one assumed, and that only lands if you were there when the assumption was
+made.
 
-Read in order. Every project is live. Every claim here has a number behind it.
+| If you are… | Start at |
+|---|---|
+| new to MCP entirely | [What is MCP?](/learn/start/what-is-mcp) — you are nearly there |
+| curious what Claude Desktop is actually doing | [🔁 The Host](/learn/host/a-while-loop) |
+| about to give an agent a dangerous tool | [✋ The Gate](/learn/gate/hint-not-permission) |
+| watching an agent run out of room on big jobs | [👥 The Crew](/learn/crew/the-ceiling) |
+| worried something you connected can spend money | [💸 The Ledger](/learn/ledger/four-unused) |
+| here for the war stories | [The gotcha compendium](/learn/picture/gotchas) |
+
+## Every project is real, live, and public
+
+Nothing here is a worked example invented for a tutorial. All five were built,
+deployed, and are running right now.
+
+<ProjectGrid>
+  <ProjectCard n={1} emoji="🍪" name="The Server" tagline="An MCP server. Offers tools, waits." href="/learn/server/vending-machine" repo="https://github.com/ketankshukla/learn-mcp-5-year-old" />
+  <ProjectCard n={2} emoji="🔁" name="The Host" tagline="An MCP host that owns the loop." href="/learn/host/a-while-loop" repo="https://github.com/ketankshukla/learn-mcp-agent-loop" />
+  <ProjectCard n={3} emoji="✋" name="The Gate" tagline="Approval gates, Postgres, evals, replay." href="/learn/gate/hint-not-permission" repo="https://github.com/ketankshukla/learn-mcp-agent-guard" />
+  <ProjectCard n={4} emoji="👥" name="The Crew" tagline="Sub-agents, one approval queue, cost measurement." href="/learn/crew/the-ceiling" repo="https://github.com/ketankshukla/learn-mcp-agent-crew" />
+  <ProjectCard n={5} emoji="💸" name="The Ledger" tagline="Sampling, a spend gate, a ledger." href="/learn/ledger/four-unused" repo="https://github.com/ketankshukla/learn-mcp-agent-ledger" />
+</ProjectGrid>
+
+The [Run it all yourself](/learn/picture/run-it) page has the clone table, the
+prerequisites, and — explicitly — which commands spend money and which don't.
+
+## Every claim here has a number behind it
+
+This is the property that makes the course worth your time, so it is worth
+saying plainly.
+
+**Every figure on this site came from a real run.** 439k tokens. 0 of 36. 13/13
+for `$0.00`. 2.01× becoming 1.08×. None of them are illustrative, rounded for
+effect, or invented to make a point land harder.
+
+<Callout type="lesson" title="Which cuts both ways">
+  Where a number is soft, this site says so. Project #4's 60-jar cost
+  comparison is *"a wash"* rather than a percentage, because the run-to-run
+  spread was a meaningful fraction of the gap. The 240-jar figures are one
+  attempt per mode, so treat the magnitudes as one significant figure.
+
+  A course that only reports its clean measurements is teaching you a genre,
+  not a practice.
+</Callout>
+
+## The three-document convention
+
+All five repos have the same three files, and the split is deliberate enough
+to steal:
+
+| File | For | Answers |
+|---|---|---|
+| **`README.md`** | Understanding | *What is this? Why does it exist?* |
+| **`BUILD_FROM_SCRATCH.md`** | Doing | *Which commands, in what order, and what breaks?* |
+| **`NEXT_STEP.md`** | Deciding | *What's missing, and what should the next project be?* |
+
+The reason it works is that the three have genuinely different readers, and
+each stays useful because it is not trying to serve the other two.
+
+Every `BUILD_FROM_SCRATCH.md` ends with an appendix titled *"the N things that
+actually broke."* There are **40** of them across the five projects, and they
+are collected — searchable, filterable, with the cause and the fix — in [the
+gotcha compendium](/learn/picture/gotchas).
+
+## Two conventions on this site
+
+**The section colour tells you where you are.** Each of the six sections has
+one vivid accent, and it shows up on the headings, the active sidebar item, the
+rule at the top of the page, and the strokes in the diagrams. If the page is
+rose, you are in the Gate.
+
+**The diagrams are live.** They are rendered in your browser from Mermaid
+source, not shipped as images, so they scroll inside their own box rather than
+blowing out the page. Most of them are lifted directly from the source READMEs
+where the per-node colours already carry meaning — red is failure, green is
+success, amber is the interesting bit.

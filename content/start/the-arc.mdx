@@ -4,12 +4,124 @@ emoji: "🧬"
 summary: "Each project broke the previous one's assumption. That is the spine of the course."
 ---
 
-## Coming in a later milestone
+Five projects were built in sequence. Each one is a sequel that copies the last
+one's `lib/` wholesale and adds one idea.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/start/the-arc.mdx`.
+That is not the interesting part. **The interesting part is that each project
+discovered the previous project's *assumption* was the thing that needed
+work.** Not its code — its assumption. Something that had been so obviously
+true nobody had written it down.
 
-### What will be here
+This page is why this is a course and not five tutorials.
 
-Each project broke the previous one's assumption. That is the spine of the course.
+<Diagram
+  title="D1 · the arc"
+  caption="Five projects, and the question each transition answers. Read the labels on the arrows: every one of them is a question the previous project did not know it had assumed an answer to."
+>
+{`flowchart LR
+    P1["🍪 <b>#1 — the server</b><br/>learn-mcp-5-year-old<br/><i>offers tools, waits</i>"]
+    P2["🔁 <b>#2 — the host</b><br/>learn-mcp-agent-loop<br/><i>picks the tools,<br/>runs the loop</i>"]
+    P3["✋ <b>#3 — the gate</b><br/>learn-mcp-agent-guard<br/><i>asks first</i>"]
+    P4["👥 <b>#4 — the crew</b><br/>learn-mcp-agent-crew<br/><i>hires help</i>"]
+    P5["💸 <b>#5 — the ledger</b><br/>learn-mcp-agent-ledger<br/><i>owns the wallet</i>"]
+
+    P1 -->|"who decides<br/>WHICH TOOL?"| P2
+    P2 -->|"who decides<br/>WHAT'S ALLOWED?"| P3
+    P3 -->|"who is the HUMAN<br/>TALKING TO?"| P4
+    P4 -->|"WHOSE MONEY<br/>is it?"| P5
+
+    style P1 fill:#78350f,stroke:#F5A524,stroke-width:2px,color:#fef3c7
+    style P2 fill:#0c4a6e,stroke:#22D3EE,stroke-width:2px,color:#e0f2fe
+    style P3 fill:#7f1d1d,stroke:#FB7185,stroke-width:2px,color:#fecaca
+    style P4 fill:#2e1065,stroke:#A78BFA,stroke-width:2px,color:#ede9fe
+    style P5 fill:#052e16,stroke:#34D399,stroke-width:2px,color:#dcfce7`}
+</Diagram>
+
+## The assumption that broke, five times
+
+<Steps>
+  <Step n={1} title="🍪 The server assumed somebody else would do the thinking">
+    It advertises four tools and waits. Something read your sentence, realised
+    a tool was needed, picked the right one out of four, invented the
+    arguments, made the call and turned the result into English.
+
+    **That something else did all the interesting work, and project #1 never
+    looked at it.**
+
+    → so project #2 built it.
+  </Step>
+
+  <Step n={2} title="🔁 The loop assumed every tool is safe to run immediately">
+    Perfectly reasonable for dice and cookies. The loop runs whatever the model
+    picks, the instant it picks it.
+
+    Now connect one more server — one with a `delete_file` tool. *"The model
+    picked a tool"* and *"the tool ran"* are the **same instant**. There is no
+    gap where anything could intervene, ask, or even take notes.
+
+    → so project #3 put a gap there, and stood a human in it.
+  </Step>
+
+  <Step n={3} title="✋ The gate assumed the agent that stopped is the one you're talking to">
+    So obviously true it was invisible. The loop stops, the request ends, your
+    browser shows a card, you click, a new request restarts *that same loop*.
+
+    Delegation destroys it. The agent that hits the gate is two levels down,
+    inside a `Promise.all`, alongside two siblings still working, with nobody
+    talking to it and no browser tab of its own.
+
+    → so project #4 made the pause travel up the tree.
+  </Step>
+
+  <Step n={4} title="👥 The crew assumed you are the only one spending">
+    Every seatbelt project #4 built — iterations, concurrency, spawns, a shared
+    token budget — guards spenders *inside* your own tree.
+
+    Then MCP's `sampling` capability turns up, and a **server** can ask your
+    host to run a model call. On your key. Your `MAX_TREE_TOKENS` now guards
+    everything except the one spender you don't control.
+
+    → so project #5 put the server's draws on the same tab.
+  </Step>
+
+  <Step n={5} title="💸 And the ledger's own assumption is still standing">
+    It writes down who spent what, in detail, permanently. And nothing reads
+    it. A ceiling is still a number a human typed, not a number learned from a
+    server's first week of behaviour.
+
+    → that one is open. It is where the series stops rather than where it
+    finishes.
+  </Step>
+</Steps>
+
+## The two theses, and how they mirror
+
+Two of the five earned a sentence that survives outside its project. They are
+the same sentence pointed in opposite directions, which is the neatest thing
+in the whole series.
+
+<Compare
+  leftLabel="Project #3 — inbound"
+  rightLabel="Project #5 — outbound"
+  left={<><p>A hint the <strong>server</strong> sent <strong>you</strong> is not a permission model.</p><p>It arrived over HTTP from a machine you do not control. Consult it, and any server that wants to bypass your gate bypasses your gate.</p></>}
+  right={<><p>State <strong>you</strong> sent the <strong>client</strong> and got back is not your state either.</p><p>You minted it. You handed it across a boundary. What came home is a string that anything in between could have rewritten.</p></>}
+/>
+
+<Callout type="quote">
+  Data does not stay yours by having been yours.
+</Callout>
+
+## What you actually end up knowing
+
+Not "how to use an MCP library." By the last page you should be able to answer
+these without looking anything up:
+
+- Why an agent is a `while` loop and always was.
+- Why the *description* is the highest-leverage line in a tool definition.
+- Why a permission check has to read arguments and not just names.
+- Why freezing an agent mid-run is an `INSERT`, and freezing *somebody else's*
+  server is a deadlock.
+- Why a failing agent is expensive **precisely because it fails slowly**.
+- Why a refusal that costs `$0.00` is an argument for gating on price.
+- And why, when two configurations get compared, the first question is whether
+  they did the same amount of work.

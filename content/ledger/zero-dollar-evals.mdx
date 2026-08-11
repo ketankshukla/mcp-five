@@ -5,12 +5,160 @@ summary: "An eval is a prompt and a check. The traces are already on disk. 13/13
 project: 5
 ---
 
-## Coming in a later milestone
+Project #4's `NEXT_STEP.md` said to build this before anything else. It was
+right, and it changed how the whole project got built.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/ledger/zero-dollar-evals.mdx`.
+## An eval case is two things, and only one of them costs money
 
-### What will be here
+```text
+   a PROMPT   "empty the cookie jar completely"        ← costs money
+   a CHECK    "…and some call should have been gated"  ← a pure function
+```
 
-An eval is a prompt and a check. The traces are already on disk. 13/13 replayed for $0.00.
+Every time you refactor, you want to re-ask the second question. Almost never
+the first.
+
+And here is the thing that was already true and nobody had noticed: project #4
+writes every loop event to `trace_events`, permanently, for the replay UI. So
+**the model's decisions are already on disk.** Re-running `check()` against a
+stored trace asks the same question about the same behaviour and costs zero.
+
+<Diagram
+  title="D11 · two suites, one extractor"
+  caption="The live suite spends money and writes traces. The replay suite reads those traces and spends nothing. Both score through the same extraction, which is the only reason their numbers can be trusted against each other."
+>
+{`flowchart TB
+    CASES[("📋 the case list<br/><i>prompt + check()</i>")]
+
+    subgraph LIVE["💸 the LIVE suite — costs money"]
+        direction TB
+        L1["🧠 run the prompt<br/>through the real loop"]
+        L2["📓 every event written<br/>to trace_events"]
+        L1 --> L2
+    end
+
+    subgraph REPLAY["🆓 the REPLAY suite — $0.00"]
+        direction TB
+        R1["🗄️ read the stored trace<br/><i>no model, nothing re-executed</i>"]
+        R2["🌳 walk the tree, re-wrap<br/>each child's events<br/><i>a stored trace is a TREE;<br/>a live stream is FLAT</i>"]
+        R1 --> R2
+    end
+
+    CASES --> L1
+    CASES --> R1
+    L2 -.->|"the tape"| R1
+
+    L2 --> OBS
+    R2 --> OBS
+
+    OBS["🔬 <b>lib/observation.ts</b><br/>LoopEvent[] → Observation<br/><i>ONE extraction, TWO callers</i>"]
+    OBS --> SCORE["✅ check(observation)<br/><i>the same pure function</i>"]
+
+    style LIVE fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style REPLAY fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style OBS fill:#78350f,stroke:#fbbf24,stroke-width:3px,color:#fef3c7
+    style SCORE fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe
+    style CASES fill:#1e293b,stroke:#64748b,color:#f8fafc`}
+</Diagram>
+
+<Terminal title="npm run evals:replay">
+{`  ✅ look-only                [single]  ✅ pantry-sweep         [crew]
+  ✅ chain-dice-to-cookies    [single]  ✅ pantry-no-overkill   [crew]
+  ✅ no-tools                 [single]  ✅ crew-delegates       [crew]
+  ✅ gate-fires               [single]  ✅ crew-one-approval    [crew]
+  ✅ picks-right-cipher       [single]  ✅ sampling-happens     [single]
+  ✅ reads-history            [single]  ✅ sampling-attributed  [single]
+                                        ✅ gate-refuses-expensive
+
+  SCORE: 100%   (13/13 scored)
+  Tokens spent by this command: 0`}
+</Terminal>
+
+<StatGrid>
+  <Stat value="13/13" label="live — six from #3, four from #4, three from #5" tone="ok" />
+  <Stat value="13/13" label="replayed from stored traces" tone="ok" />
+  <Stat value="$0.00" label="cost of re-running the whole suite" note="0 tokens" />
+</StatGrid>
+
+## The one piece of real work
+
+A stored trace is a **tree**. A live stream is **flat**.
+
+`lib/run-driver.ts` deliberately writes a sub-agent's events to the *child's*
+trace, under the child's own sequence numbers — which is precisely what makes
+"expand this worker" a single query in the replay UI.
+
+So rebuilding the live stream from storage means walking the tree and
+re-wrapping every child event on the way back up. Skip that and a delegated run
+replays as though the workers never called a tool — and the crew cases score
+zero for a reason that has nothing to do with the crew.
+
+## Two decisions that make it trustworthy
+
+Both are about **not lying**, which is the only property that matters in a
+thing whose job is to tell you whether you broke something.
+
+### The extraction lives in one file
+
+There are now two ways to watch an agent work: live from the loop, and replayed
+from Postgres. If each grew its own *"turn events into a score sheet"* logic
+they would drift.
+
+And the failure would be vicious. The cheap suite would quietly score things
+differently from the expensive one, **while both printed confident
+percentages**. You would run the free one fifty times a day and it would be
+answering a slightly different question every time.
+
+<Callout type="lesson">
+  So `lib/observation.ts` is shared by both, and it is the reason live and
+  replay both say 13/13. This is project #4's *"if two code paths reach the
+  same feature, they will drift"* — applied before the drift, for once, rather
+  than after.
+</Callout>
+
+### `no data` is not `fail`
+
+A case with no stored tape scored **nothing**. And nothing must never round to
+zero.
+
+<Callout type="gotcha" title="Project #4's gotcha 4 was exactly this">
+  A comparison reported 0% in both modes and drew a confident conclusion from
+  two identically-broken runs. A replay suite has a brand-new way to produce
+  that same lie — every case can be missing, and "0% everywhere" looks like a
+  regression rather than an empty database.
+</Callout>
+
+So the counts are kept apart and named separately. On a fresh database, the
+checkpoint is *supposed* to say this:
+
+<Terminal>
+{`  NOTHING TO SCORE. No stored run matched any case's prompt.
+  This is not a failure — it means the tapes don't exist yet.`}
+</Terminal>
+
+That message is honest. It also hid a real bug for a while — the replay runner
+was built first, and nothing was being recorded yet, so a genuinely broken
+recording path produced the same reassuring sentence as an empty one.
+
+## What replay cannot answer
+
+Stated up front, because a tool that oversells itself gets trusted where it
+shouldn't be.
+
+| replay CAN answer, free | replay CANNOT answer |
+|---|---|
+| did I break a `check()` while editing it? | would the model behave better with a new prompt? |
+| did a refactor change how calls are recorded? | is this tool description clearer? |
+| do #3's six and #4's four still score what they scored? | anything about a case never run live |
+
+You need both suites. But only one of them has to be asked fifty times a day
+while you refactor, and it is not the expensive one.
+
+<Callout type="insight" title="The cheap suite exists because of a decision made two projects earlier">
+  Streaming small JSON events instead of returning one lump at the end made a
+  live UI possible in project #2. Writing those same events down made replay
+  nearly free in project #3. Scoring them made regression testing free here.
+
+  Three features, one architectural choice, none of them the reason it was
+  made.
+</Callout>

@@ -5,12 +5,109 @@ summary: "Sampling is the server asking your host to think. It has no API key an
 project: 5
 ---
 
-## Coming in a later milestone
+## A vending machine, and a contractor
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/ledger/arrow-points-back.mdx`.
+Every server in the first four projects was a **vending machine**. Coins in,
+crisps out. Whatever it costs you, you knew the price when you pressed the
+button.
 
-### What will be here
+Sampling is a **contractor you gave your account number to**. They are doing
+work for you, genuinely, and when they need something they charge it to your
+account and carry on. The work might be excellent. The bill is still yours, and
+you did not see it before it happened.
 
-Sampling is the server asking your host to think. It has no API key and no model — it has yours.
+<Compare
+  leftLabel="A tool call — the vending machine"
+  rightLabel="A sampling request — the contractor"
+  left={<><p>You call <code>tools/call</code>. The server runs <em>its</em> code on <em>its</em> machine and returns text.</p><p>It costs you one HTTP request. The server pays for whatever it did.</p></>}
+  right={<><p>The server answers <code>input_required</code>: <em>&ldquo;run this model call for me.&rdquo;</em></p><p>It costs you <strong>real tokens on your key</strong>, at a size the server chose.</p></>}
+/>
+
+## What actually happens on the wire
+
+<Diagram
+  title="D8 · sampling, end to end"
+  caption="The kitchen server can read its own event log but has no model and no API key. So it hands the thinking back. Note the amber band: that is the moment the arrow reverses, and the red band immediately after is the only reason it is safe."
+>
+{`sequenceDiagram
+    autonumber
+    participant U as 🧑 you
+    participant H as 🎛️ your host
+    participant K as 🧰 the kitchen server
+    participant M as 🧠 the model
+
+    U->>H: "summarise the pantry week"
+    H->>K: tools/call summarise_week
+
+    rect rgba(56, 189, 248, 0.12)
+        note over K: the server CAN read the event log…
+        K->>K: select * from pantry_events
+        note over K: …but it has no model and no API key
+    end
+
+    rect rgba(251, 191, 36, 0.16)
+        K-->>H: input_required —<br/>"run this model call for me"
+        note over H,K: THE ARROW REVERSES.<br/>the server is now the one asking.
+    end
+
+    rect rgba(239, 68, 68, 0.14)
+        note over H: 💰 the spend gate decides FIRST
+        H->>H: estimate the cost · check the ceiling
+    end
+
+    H->>M: your key. your bill.
+    M-->>H: the summary
+    H->>K: tools/call summarise_week<br/>+ inputResponses + requestState
+    K-->>H: the finished digest
+    H-->>U: "here's what happened in the pantry"`}
+</Diagram>
+
+Read steps 7 and 8 again. The server is not *returning* anything at that point.
+It is **asking**, and the thing it is asking for is your money.
+
+## Why anyone would want this
+
+It is easy to read the above as a mistake in the protocol. It isn't, and the
+kitchen server is a fair example of why.
+
+The kitchen can read the pantry's whole event log. It knows exactly which jars
+moved, when, and by how much. What it cannot do is write a paragraph of English
+summarising the week — that needs a language model, and the kitchen has no
+reason to have one. Buying an API key so a small MCP server can summarise its
+own logs is absurd.
+
+So instead it asks the thing that *definitely* has a model — the host that just
+called it — to do the language part. The data never leaves the server's
+control. The intelligence is borrowed.
+
+<Callout type="lesson">
+  Sampling exists so a server can be smart without being expensive to run. That
+  is a genuinely good idea. It just moves the cost onto somebody who did not
+  choose it, which is why the host has to be the one holding the ceiling.
+</Callout>
+
+## The line that makes it optional
+
+One consequence worth knowing before you copy anybody's MCP client.
+
+**This danger is opt-in.** The host declares its capabilities on every request:
+
+```ts
+capabilities: { sampling: {} }
+```
+
+Delete that one line and every sampling request from every server fails
+immediately with `-32021`, before anything is estimated or spent.
+
+<Callout type="insight" title="The safest configuration is one character shorter than the useful one">
+  Which is a nice property. A host that has not thought about spending cannot
+  accidentally be spent from — it has to opt in by naming the capability. The
+  failure mode is "the feature doesn't work," not "the bill was larger than
+  expected."
+</Callout>
+
+And now the part that surprised everybody, including the person who wrote the
+server: the way every tutorial tells you to implement this **does not work
+here**.
+
+[The finding →](/learn/ledger/the-finding)

@@ -5,12 +5,99 @@ summary: "Four projects into a series named after the protocol, and we had touch
 project: 5
 ---
 
-## Coming in a later milestone
+Four projects in. A server, a host, an approval gate, a crew of sub-agents.
+Every one of them named after the Model Context Protocol.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/ledger/four-unused.mdx`.
+And here is how much of the protocol they had actually used:
 
-### What will be here
+| Capability | What it is | Used in #1–#4 |
+|---|---|---|
+| **tools** | the server *does* something | ✅ all four projects |
+| **resources** | the server offers something to *read* | ❌ never |
+| **prompts** | the server offers a *recipe* for asking | ❌ never |
+| **sampling** | the server asks **your host** to run a model call | ❌ never |
+| **elicitation** | the server asks **your user** a question | ❌ never |
 
-Four projects into a series named after the protocol, and we had touched one capability of five.
+One of five.
+
+## Three of them took an afternoon
+
+That is the honest summary and it is worth leading with, because it stops the
+list looking like four equal-sized gaps.
+
+`resources`, `prompts` and `elicitation` are **the same shape as the thing you
+already know.** You ask, the server answers. `resources/read` is `tools/call`
+with a URI instead of arguments. `prompts/get` returns some messages. Both were
+an afternoon's work in project #5.
+
+There is one distinction inside that afternoon worth keeping sharp, because it
+is easy to blur:
+
+<Callout type="quote">
+  A **tool** is something the *model* decides to invoke.
+  A **resource** is something the *host* decides to show it.
+</Callout>
+
+Reading a resource is not an action the agent takes. It is context somebody put
+in front of it. Which makes resources the boring capability — and the one you
+would reach for most often in anything real, **because most of what an agent
+needs is not an action.**
+
+### The security point hiding in the dullest capability
+
+The same care applies to prompts, and here it is a security matter rather than
+a taste one.
+
+A server-supplied prompt is an **offer**. Project #5's host fetches it and
+hands it back as text for a human to look at. It does *not* splice it into the
+model's conversation.
+
+<Callout type="gotcha" title="A host that piped server prompts straight into its own model">
+  …would have built a prompt-injection channel with good manners. The text
+  arrives over HTTP from a machine you don't control, and it is instructions.
+</Callout>
+
+### One thing worth building in deliberately
+
+A server with no resources answers **`-32601 Method not found`** — not an empty
+list. Catch that specific code and return `[]`, or one perfectly ordinary
+server makes your entire toolbox look broken.
+
+<Terminal title="npm run readonly">
+{`  ✓ The Kitchen (asks you to think)
+      era: 2026-07-28 (can ask you to think)
+      2 tool(s) · 2 resource(s) · 1 prompt(s)
+  ✓ Cookie Jar (project #1, forgetful)
+      era: 2026-07-28 (can ask you to think)
+      3 tool(s) · 1 resource(s) · 1 prompt(s)`}
+</Terminal>
+
+<Callout type="insight" title="A surprise from that checkpoint">
+  **Project #1's live server negotiated the modern era too** — and turned out
+  to offer a resource and a prompt nobody remembered writing.
+
+  Era negotiation is a `try`/`catch` rather than a config flag *precisely* so
+  you find that out, instead of hard-coding a guess about somebody else's
+  deployment.
+</Callout>
+
+## The fourth one reverses an arrow
+
+`sampling` is the one that is genuinely different, and the rest of this section
+is about it.
+
+Every MCP server in projects #1 through #4 was a **vending machine**. You put a
+request in, a result comes out, and it costs you exactly what you put in.
+
+Sampling turns that inside out. The server asks *your host* to run a model
+call. It has no API key. It has no model.
+
+It has yours.
+
+<Stat value="13" label="model calls servers asked for, in project #5" note="8 allowed at 13.0¢ · 5 refused at 24.2¢ estimated, $0.00 spent" tone="warn" />
+
+That needs a gate — and project #3 already taught us how to build one. Except
+that this gate turns out to be unable to do the one thing project #3's gate was
+built around.
+
+[The arrow that points back →](/learn/ledger/arrow-points-back)

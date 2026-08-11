@@ -5,12 +5,117 @@ summary: "The model, maxTokens and requestState — three things from across the
 project: 5
 ---
 
-## Coming in a later milestone
+Project #3 refused to read a server's `destructiveHint`. This is the same
+refusal, applied three more times — and the reason it is the same lesson is
+that all three of these arrive **from the other side of a network boundary**,
+and all three are among the biggest inputs to what you are about to be charged.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/ledger/refuses-to-trust.mdx`.
+| the server sends | the host does |
+|---|---|
+| `modelPreferences: { hints: [{ name: "claude-sonnet-5" }] }` | treats it as a **preference**, resolves against an allowlist, defaults to the **cheapest** model on a miss |
+| `maxTokens: 100000` | clamps to **1024**, with no explanation owed |
+| `requestState: "…"` | echoes it back **without reading it** |
 
-### What will be here
+## 1 — The model is a preference, not an instruction
 
-The model, maxTokens and requestState — three things from across the boundary, all inputs to the bill.
+A `sampling/createMessage` request carries `modelPreferences`. The MCP spec is
+explicit that this is a *preference* and the host decides.
+
+Take that seriously and the reason is obvious:
+
+<Callout type="lesson">
+  The requested model is the single biggest input to the price, and it arrives
+  from across the boundary. **A server that can pick the model can pick your
+  bill.**
+</Callout>
+
+So: an allowlist, and — this is the bit worth stealing — a default to the
+**cheapest** model rather than the closest match.
+
+```ts
+export function resolveModel(requested?: string): { model: string; note?: string } {
+  if (!requested) return { model: DEFAULT_SAMPLING_MODEL };
+  if (PRICES[requested]) return { model: requested };
+  return {
+    model: DEFAULT_SAMPLING_MODEL,
+    note:
+      `The server asked for "${requested}", which this host does not offer. ` +
+      `Using ${DEFAULT_SAMPLING_MODEL} instead.`,
+  };
+}
+```
+
+A server asking for something the host does not price gets Haiku **and a
+note** — not an error. It can still do its job, just not on the most expensive
+model available.
+
+<Callout type="insight" title="Degrade, don't fail">
+  The failure mode of an allowlist that throws is that a server which asked for
+  the wrong string stops working entirely, and whoever wrote it has to guess
+  why. The failure mode of one that degrades is a slightly less good summary
+  and a sentence explaining what happened.
+</Callout>
+
+## 2 — maxTokens is clamped, with no explanation owed
+
+A server may ask for whatever output ceiling it likes. It gets `1024` or less.
+
+```ts
+export const MAX_SAMPLING_OUTPUT_TOKENS = 1024;
+```
+
+Without it, `maxTokens: 1_000_000` is a **denial-of-wallet attack that arrives
+looking exactly like a JSON field.** No exploit, no malformed input, nothing an
+input validator would flag — just a large number in a place where large numbers
+are legal.
+
+Note that the clamp happens *before* the estimate, so the price the gate
+reasons about describes what will actually run. Estimating the request as sent
+and then clamping it would give you a gate that refuses things it was never
+going to do.
+
+## 3 — requestState is echoed, never read
+
+The server hands you an opaque string on round 1 and expects it back on round
+2. The host's job is to carry it.
+
+```ts
+export function passThroughRequestState(state: unknown): string | undefined {
+  return typeof state === "string" ? state : undefined;
+}
+```
+
+That is the entire function, and its restraint is the point. The host does not
+parse it, does not read it, and never lets it influence a decision on its own
+side.
+
+<Callout type="quote">
+  Our job is to not become a courier that also opens the envelope.
+</Callout>
+
+The other half of that story — what the *server* has to do, and why it is the
+sharpest version of this series' one lesson — is on
+[Data does not stay yours](/learn/ledger/data-not-yours).
+
+## The gate you can unit-test
+
+One last property, and it is a design choice rather than an accident.
+
+`classifySpend()` is **not async**. It does not read the database. It does not
+touch the network. Everything it needs is passed in.
+
+```ts
+export function classifySpend(
+  request: SpendRequest,
+  context: SpendContext = {},
+): SpendVerdict
+```
+
+<Callout type="lesson">
+  A gate you can call in a unit test with a literal object is a gate people
+  actually test. This one is scored by the eval suite, which is only possible
+  because it has no dependencies to stand up.
+
+  The security control that is hard to exercise is the security control nobody
+  exercises.
+</Callout>

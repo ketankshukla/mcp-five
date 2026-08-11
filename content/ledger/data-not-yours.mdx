@@ -5,12 +5,106 @@ summary: "You minted it, handed it across a boundary and got it back. It is inpu
 project: 5
 ---
 
-## Coming in a later milestone
+The multi-round-trip flow gives the **server** a way to keep state across the
+two halves of a sampling exchange. It returns an opaque `requestState` string
+on round 1, and the client hands it back verbatim on round 2.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/ledger/data-not-yours.mdx`.
+Which sounds like a session. It is not one.
 
-### What will be here
+## The SDK's own documentation is unusually blunt
 
-You minted it, handed it across a boundary and got it back. It is input now. HMAC it.
+<Callout type="quote">
+  It travels through the client and comes back as **attacker-controlled
+  input**: a server that lets it influence authorization, resource access, or
+  business logic MUST integrity-protect it (e.g. HMAC or AEAD) and MUST reject
+  state that fails verification. The SDK does not do this for you.
+</Callout>
+
+Read that last sentence again. Not "the SDK does this by default and you can
+turn it off." **The SDK does not do this for you.**
+
+## Why this is the sharpest version of the series' one lesson
+
+Project #3's thesis was about something arriving *from* the other side:
+
+<Compare
+  leftLabel="Project #3 — inbound"
+  rightLabel="Project #5 — outbound, and worse"
+  left={<><p>A hint the <strong>server</strong> sent <strong>you</strong> is not a permission model.</p><p>Easy to accept, because it was obviously never yours. Somebody else wrote that flag.</p></>}
+  right={<><p>State <strong>you</strong> sent the <strong>client</strong> and got back is not your state either.</p><p>Harder to accept, because you wrote it. Which is exactly why people skip the check.</p></>}
+/>
+
+<Callout type="quote">
+  Data does not stay yours by having been yours.
+</Callout>
+
+You minted it. You handed it across a boundary you do not control. What came
+home is a string that anything in between could have rewritten.
+
+`{"jars":3}` becoming `{"jars":300}` is **one edit away** — and if your server
+reads that number to decide how much work to do, or which rows to read, or what
+the user is allowed to see, you have handed the client your authorization
+logic and asked it nicely not to look.
+
+## Four lines
+
+So the kitchen server signs it on the way out and verifies it on the way back:
+
+```ts
+// mint on round 1
+requestState: await stateCodec.mint({ focus, depth, jarIds }),
+
+// verify on round 2 — and the verify hook is what makes the
+// signature load-bearing rather than decorative
+createRequestStateCodec({ key });
+```
+
+`createRequestStateCodec({ key })` gives you `mint` and `verify`, and the
+`requestState.verify` hook in `ServerOptions` is the part that matters: without
+wiring it in, you have a signature nobody checks, which is worse than no
+signature because it looks like a control.
+
+<Callout type="lesson" title="Four lines, and without them this repo would be a worked example of the bug">
+  Not a hypothetical. A tutorial repo that round-trips unsigned state and reads
+  it back is *teaching* the vulnerability, with the authority of working code.
+</Callout>
+
+## And the host's half: don't open the envelope
+
+The other side of the same wariness is that the **host** does not read it
+either:
+
+```ts
+export function passThroughRequestState(state: unknown): string | undefined {
+  return typeof state === "string" ? state : undefined;
+}
+```
+
+That is the whole function. The host is a courier. It carries the envelope
+without opening it, never parses it, and never lets it influence a decision on
+its own side.
+
+Two different parties, two different reasons, same conclusion:
+
+| | reasons |
+|---|---|
+| **the server** | it wrote the state, but the state has been somewhere untrusted. So: sign it, verify it, reject what fails. |
+| **the host** | it didn't write the state and has no business in it. So: carry it, verbatim, and don't look. |
+
+## The general shape
+
+Strip out MCP and sampling and this is a rule about any system where data
+leaves your process and comes back.
+
+- A cookie you set. A JWT you issued. A hidden form field. A callback URL
+  parameter. A `state` blob in an OAuth flow.
+- Every one of them is *your* data, right up until it is on somebody else's
+  machine.
+- After that it is **input**, and it gets the same suspicion as anything else a
+  stranger typed.
+
+<Callout type="insight" title="The tell">
+  If you find yourself writing "but I generated this value, so it must be
+  valid" — that is the sentence. It is doing all the load-bearing work in the
+  argument and it is false the moment the value left the building.
+</Callout>

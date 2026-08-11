@@ -5,12 +5,184 @@ summary: "Every tutorial shows a server→client push. It cannot work on serverl
 project: 5
 ---
 
-## Coming in a later milestone
+## The obvious way to write it
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/ledger/the-finding.mdx`.
+Sampling, in every tutorial, article and example you will find, is one line:
 
-### What will be here
+```ts
+const answer = await server.server.createMessage({ ... });   // ❌
+```
 
-Every tutorial shows a server→client push. It cannot work on serverless, and the SDK says why.
+The server pushes a request down the connection to the client, the client runs
+the model, the answer comes back up. It reads beautifully. It is in the types.
+
+It throws.
+
+## Reading the types on disk, before writing any code
+
+This is a habit worth stealing, and it is the fifth consecutive project where
+it changed the design.
+
+Before building anything, go and look at what is actually installed:
+
+```bash
+npm ls @anthropic-ai/sdk @modelcontextprotocol/server mcp-handler
+grep -rn "createMessage\|registerResource\|registerPrompt\|elicitInput" \
+  node_modules/@modelcontextprotocol/server/dist/*.d.mts | head
+```
+
+The types say sampling exists. `server.server.createMessage()`,
+`registerResource`, `registerPrompt`, `elicitInput` — all there, all typed. You
+could stop here and start building.
+
+**Don't. Every one of them is marked `@deprecated`,** with this beside it:
+
+<Callout type="quote">
+  the 2026-07-28 revision has no server→client request channel
+</Callout>
+
+So check the constants:
+
+```bash
+node --input-type=module -e "
+import { LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/server';
+console.log(LATEST_PROTOCOL_VERSION, JSON.stringify(SUPPORTED_PROTOCOL_VERSIONS));"
+```
+
+<Terminal>
+{`2025-11-25 ["2025-11-25","2025-06-18","2025-03-26","2024-11-05","2024-10-07"]`}
+</Terminal>
+
+No `2026-07-28` anywhere. A constant literally named `LATEST_PROTOCOL_VERSION`
+does not contain the latest protocol version.
+
+<Callout type="gotcha" title="The types and the runtime now disagree">
+  And when they disagree, **the only thing that settles it is running it.** Not
+  reading more documentation, and certainly not remembering how sampling works.
+
+  So: write a throwaway server with one sampling tool, and `curl` it.
+</Callout>
+
+## The probe, and what came back
+
+The naive version first. Here is the actual response:
+
+<Terminal title="curl → the naive server">
+{`{"result":{"content":[{"type":"text","text":
+  "Cannot request input 'think' (sampling/createMessage): the client on this
+   2025-era connection did not declare the required capability (no client
+   capabilities are available on this connection — per-request legacy serving
+   cannot receive server-to-client requests)"}],"isError":true}}`}
+</Terminal>
+
+Read the last clause slowly, because it is the whole finding:
+
+> *per-request legacy serving cannot receive server-to-client requests*
+
+**A server→client push needs a connection to travel down.** A serverless
+function does not have one. It has a request, and then it doesn't. There is
+nowhere for the push to go.
+
+This is not a bug, and it is not a missing feature. It is structural. Every
+tutorial showing `createMessage()` was written against a long-lived process — a
+local `stdio` server, or something on a box that stays up.
+
+## A second era, hiding behind an envelope
+
+`SUPPORTED_PROTOCOL_VERSIONS` only describes the old `initialize` handshake.
+The modern era does not negotiate at connection time at all, because there is
+no connection. It travels **per request**, in a `_meta` envelope:
+
+```bash
+META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+  "io.modelcontextprotocol/clientInfo":{"name":"probe","version":"1"},
+  "io.modelcontextprotocol/clientCapabilities":{"sampling":{}}}'
+
+curl -s -X POST http://localhost:3000/api/probe \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'Mcp-Method: tools/call' -H 'Mcp-Name: probe_sampling' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",
+       \"params\":{\"name\":\"probe_sampling\",\"arguments\":{},$META}}"
+```
+
+Same server. Same tool. Different era. And this time:
+
+<Terminal title="curl → the same server, modern envelope">
+{`{"result":{
+  "resultType":"input_required",
+  "inputRequests":{"think":{"method":"sampling/createMessage","params":{…}}},
+  "requestState":"…"}}`}
+</Terminal>
+
+**There it is.** Sampling is not a callback. It is a **retry**.
+
+## The shape that replaced it
+
+<Diagram
+  title="D9 · the multi-round-trip"
+  caption="Round 1 returns input_required rather than a result. The host runs the model itself, then calls the same tool a second time carrying inputResponses and the requestState it was handed. No connection is held open at any point, which is exactly why it works on serverless."
+>
+{`flowchart TB
+    R1["🎛️ host → server<br/><b>round 1</b> · tools/call<br/><i>summarise_week { depth: 'brief' }</i>"]
+    IR["🧰 server → host<br/><code>resultType: 'input_required'</code><br/><code>inputRequests: { summary: … }</code><br/><code>requestState: '…'</code>"]
+    GAP["⏹️ <b>the request has ENDED</b><br/><i>nothing is held open.<br/>no connection, no socket, no waiting.</i>"]
+    GATE{"💰 the host's<br/>spend gate"}
+    MODEL["🧠 the host runs the model<br/><i>its key, its bill, its choice of model</i>"]
+    R2["🎛️ host → server<br/><b>round 2</b> · tools/call, the SAME tool<br/>+ <code>params.inputResponses</code><br/>+ <code>params.requestState</code>"]
+    DONE(["✅ <code>resultType: 'complete'</code>"])
+
+    R1 --> IR --> GAP --> GATE
+    GATE -->|"under the ceiling"| MODEL --> R2 --> DONE
+    GATE -->|"over it"| NO(["🛑 refused, $0.00 spent<br/><i>no model was contacted</i>"])
+
+    style R1 fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style IR fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style GAP fill:#0b0b0f,stroke:#64748b,stroke-dasharray: 6 4,color:#94a3b8
+    style GATE fill:#7f1d1d,stroke:#ef4444,stroke-width:3px,color:#fecaca
+    style MODEL fill:#2e1065,stroke:#a78bfa,color:#ede9fe
+    style R2 fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style DONE fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style NO fill:#450a0a,stroke:#ef4444,color:#fecaca`}
+</Diagram>
+
+On the wire it is exactly this:
+
+```text
+round 1   →  tools/call
+          ←  {"resultType":"input_required",
+              "inputRequests":{"summary":{"method":"sampling/createMessage",…}},
+              "requestState":"…"}
+          ·  the host runs the model
+round 2   →  tools/call  + params.inputResponses + params.requestState
+          ←  {"resultType":"complete","content":[…]}
+```
+
+A retry needs no connection at all. Which is precisely why they changed it.
+
+<Callout type="lesson" title="The protocol grew a stateless shape because everything is serverless now">
+  That is the sentence to take away. The 2026-07-28 revision did not remove the
+  server→client channel because pushes are bad design. It removed it because
+  the deployment target moved, and a design that requires a held-open
+  connection stopped being implementable by most of the people trying to
+  implement it.
+</Callout>
+
+## And the reason this counts as a finding
+
+The whole thing was discovered by writing a throwaway server and curling it —
+not by remembering how sampling works, and not by reading a guide.
+
+Two of the three things that stage cost a round trip each are silent failures.
+Everything looks fine; nothing happens.
+
+| Symptom | Cause |
+|---|---|
+| `-32020` "the request headers and body disagree" | the 2026 era needs an `Mcp-Method` header, and an `Mcp-Name` when params carry a `name` or `uri` |
+| `-32021` "client capabilities do not declare the required capability" | you didn't put `sampling: {}` in the envelope. **This is why the danger is opt-in.** |
+| the handler asks for the same thing forever | `acceptedContent()` is elicitation-only. Sampling needs `inputResponse(responses, key)` → `{kind:"sampling", result}` |
+
+<Callout type="quote">
+  A deprecation notice on the thing you were about to build on is worth more
+  than a working example of it.
+</Callout>

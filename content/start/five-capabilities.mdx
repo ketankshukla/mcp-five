@@ -4,12 +4,143 @@ emoji: "🗂️"
 summary: "Tools, resources, prompts, sampling, elicitation — sorted by who pulls the trigger."
 ---
 
-## Coming in a later milestone
+The easiest way to keep these straight is not to memorise what they do. It is
+to follow the arrow back to **whoever pulled the trigger**.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/start/five-capabilities.mdx`.
+Three of them are things you ask a server for. One of them is a server asking
+*you* for a model call. One is a server asking your *user* a question. Once you
+sort them that way they stop blurring together.
 
-### What will be here
+<Diagram
+  caption="The same five capabilities, arranged by who initiates. The top three are ordinary request-and-response. The bottom two point the other way — and that reversal is what project #5 is about."
+>
+{`flowchart TB
+    subgraph ASK["🙋 things YOUR SIDE asks the server for"]
+        direction TB
+        T["🔧 TOOLS<br/><i>verbs — things to DO</i>"]
+        R["📄 RESOURCES<br/><i>nouns — things to READ</i>"]
+        P["💬 PROMPTS<br/><i>saved instructions</i>"]
+        T --> TW["🧠 the MODEL decides<br/>picks it when your<br/>description convinces it"]
+        R --> RW["🎛️ the HOST decides<br/>loads it as context,<br/>addressed by URI"]
+        P --> PW["🧑 the HUMAN decides<br/>you pick it from a menu;<br/>the model never can"]
+    end
 
-Tools, resources, prompts, sampling, elicitation — sorted by who pulls the trigger.
+    subgraph REV["↩️ things THE SERVER asks YOU for"]
+        direction TB
+        S["🧠 SAMPLING<br/><i>'run a model call for me'</i>"]
+        E["🙋 ELICITATION<br/><i>'ask your user this'</i>"]
+        S --> SW["💸 spends YOUR money<br/>on YOUR key"]
+        E --> EW["⏳ spends YOUR USER'S<br/>attention"]
+    end
+
+    ASK --> REV
+
+    style ASK fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style REV fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style SW fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fecaca
+    style T fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style R fill:#1e293b,stroke:#a78bfa,color:#f8fafc
+    style P fill:#1e293b,stroke:#4ade80,color:#f8fafc`}
+</Diagram>
+
+## The three that point the ordinary way
+
+<Capability
+  name="tools"
+  emoji="🔧"
+  oneLiner="A verb. The server does something, and the MODEL decides to invoke it."
+  introducedIn="project #1"
+>
+  On the wire: `tools/list` to see what exists, `tools/call` to run one. This
+  is 90% of the value and 100% of the tutorials.
+
+  It is also the only capability projects #1 through #4 ever used.
+</Capability>
+
+<Capability
+  name="resources"
+  emoji="📄"
+  oneLiner="A noun. Something to read, with an address rather than arguments — and the HOST decides to show it."
+  introducedIn="project #5"
+>
+  On the wire: `resources/list`, then `resources/read` with a URI like
+  `cookiejar://status`. Mechanically it is `tools/call` with a URI instead of
+  arguments.
+
+  The distinction that is easy to blur and worth keeping sharp:
+
+  > A **tool** is something the *model* decides to invoke.
+  > A **resource** is something the *host* decides to show it.
+
+  Reading a resource is not an action the agent takes. It is context somebody
+  put in front of it.
+</Capability>
+
+<Capability
+  name="prompts"
+  emoji="💬"
+  oneLiner="A saved fill-in-the-blank instruction that a HUMAN picks off a menu."
+  introducedIn="project #5"
+>
+  On the wire: `prompts/list`, then `prompts/get`, which returns some messages.
+
+  There is a security point hiding in the least glamorous capability. A
+  server-supplied prompt is an **offer**. Project #5's host fetches it and
+  hands it back as text for a human to look at — it does not splice it into the
+  model's conversation.
+
+  <Callout type="gotcha" title="A host that piped these straight in">
+    …would have built a prompt-injection channel with good manners. The text
+    comes from a machine you don't control.
+  </Callout>
+</Capability>
+
+## The two that point back
+
+<Capability
+  name="sampling"
+  emoji="🧠"
+  oneLiner="The server asks YOUR host to run a model call. It has no API key and no model — it has yours."
+  introducedIn="project #5"
+>
+  On the wire, in the modern protocol era, it is not a push at all. It is a
+  *retry*: the server answers your `tools/call` with `input_required`, you run
+  the model, and you call the same tool again carrying the answer.
+
+  This is the one that is genuinely different, because it is the first time
+  something on the other side of the boundary can **spend your money**. That
+  is why project #5 exists and why it needed a gate.
+</Capability>
+
+<Capability
+  name="elicitation"
+  emoji="🙋"
+  oneLiner="The server asks YOUR user a question, mid-call, and waits for the answer."
+  introducedIn="project #5"
+>
+  Same multi-round-trip shape as sampling, pointed at a person instead of a
+  model.
+
+  It costs nothing and needs no spend gate, because the scarce resource here
+  is **attention**, not money. Which does not mean it is free — it means the
+  budget you are spending is a different one, and nobody bills you for it.
+</Capability>
+
+## Only one of five, for four projects
+
+Here is the honest scorecard as project #5 opened:
+
+| Capability | Used in projects #1–#4 |
+|---|---|
+| **tools** | ✅ all four projects |
+| **resources** | ❌ never |
+| **prompts** | ❌ never |
+| **sampling** | ❌ never |
+| **elicitation** | ❌ never |
+
+<Callout type="lesson" title="And the reason that is not embarrassing">
+  Three of the four missing ones are **the same shape as the one you already
+  know**. You ask, the server answers. They took an afternoon.
+
+  The fourth reverses an arrow, and it took the rest of the project.
+</Callout>

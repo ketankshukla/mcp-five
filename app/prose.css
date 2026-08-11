@@ -318,8 +318,12 @@ mark[data-highlighted-chars] {
    variables cannot reach.
    -------------------------------------------------------------------------- */
 
+/* NOT `max-width: 100%`. Mermaid renders at natural size (useMaxWidth is off,
+   see Diagram.tsx) so that a wide diagram stays legible; constraining it here
+   would undo that and squash it right back down. The parent scrolls instead.
+   `margin-inline: auto` centres the ones that are narrower than the column. */
 .mermaid-svg svg {
-  max-width: 100%;
+  max-width: none;
   height: auto;
   display: block;
   margin-inline: auto;

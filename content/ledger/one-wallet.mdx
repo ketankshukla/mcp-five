@@ -5,12 +5,143 @@ summary: "Every draw labelled with who asked — and refusals get rows too, or t
 project: 5
 ---
 
-## Coming in a later milestone
+A server's model call could plausibly be billed three ways. Only one of them
+keeps project #4's seatbelt honest.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/ledger/one-wallet.mdx`.
+<Steps>
+  <Step n={1} title="Its own budget, per server">
+    Tidy, and wrong. A per-server pot implies an ownership that does not exist,
+    and it lets a server be comfortably "in budget" while your run is already
+    broke.
+  </Step>
 
-### What will be here
+  <Step n={2} title="Untracked, outside the tree">
+    How it works if you don't think about it. Your `MAX_TREE_TOKENS` ceiling
+    then guards everything **except the one spender you don't control**, which
+    is a strange place to leave a hole.
+  </Step>
 
-Every draw labelled with who asked — and refusals get rows too, or the ledger looks switched off.
+  <Step n={3} title="The same TreeBudget the agents draw from, tagged with who asked">
+    ← this one.
+  </Step>
+</Steps>
+
+## Why it has to be the same wallet
+
+Project #4 built one wallet shared **by reference** across an agent tree, so
+that the sentence *"the whole run stops at 600,000 tokens"* was **true** rather
+than approximately true.
+
+A server's draw goes on that same tab, or that sentence quietly becomes *"600k,
+plus whatever the servers felt like."*
+
+```ts
+options.budget.add(usage);   // the SAME TreeBudget every agent draws from
+```
+
+One line. It is the line that keeps project #4's seatbelt from becoming a
+comforting decoration.
+
+<Diagram
+  title="D12 · one wallet, many spenders"
+  caption="The orchestrator, its workers, and a server that asked for a model call all draw from one TreeBudget shared by reference. Every draw carries a label saying who asked — which is what turns 'how much did that server cost me?' into a group by."
+>
+{`flowchart TB
+    W[("🏦 <b>one TreeBudget</b><br/>MAX_TREE_TOKENS = 600k<br/><i>shared by reference</i>")]
+
+    O["🧠 orchestrator<br/><i>label: agent</i>"]
+    A1["👷 worker · jars 1-20<br/><i>label: agent</i>"]
+    A2["👷 worker · jars 21-40<br/><i>label: agent</i>"]
+    S["🧰 <b>the kitchen SERVER</b><br/><i>label: server_key = 'kitchen'</i>"]
+
+    O -->|"draws"| W
+    A1 -->|"draws"| W
+    A2 -->|"draws"| W
+    S -->|"draws — on YOUR key"| W
+
+    W --> L[("📓 ledger_entries<br/><i>every draw, labelled<br/>allowed AND refused</i>")]
+    L --> Q["<b>group by server_key</b><br/><i>a question project #4<br/>could not answer</i>"]
+
+    style W fill:#78350f,stroke:#fbbf24,stroke-width:3px,color:#fef3c7
+    style S fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fecaca
+    style O fill:#2e1065,stroke:#a78bfa,color:#ede9fe
+    style A1 fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style A2 fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style L fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe
+    style Q fill:#052e16,stroke:#4ade80,color:#dcfce7`}
+</Diagram>
+
+<Callout type="quote">
+  One wallet, many spenders, every draw labelled.
+</Callout>
+
+## The label is the new work
+
+Sharing the wallet is one line. **The label is the feature**, and it is what
+`ledger_entries.server_key` is for.
+
+```sql
+create table if not exists ledger_entries (
+  id bigserial primary key,
+  run_id uuid references runs(id) on delete cascade,
+  server_key text not null,          -- THE column. everything else is detail.
+  tool_name text, model text not null,
+  estimated_cents real not null default 0,
+  actual_cents real not null default 0,
+  decision text not null check (decision in ('allowed','refused')),
+  reason text, round integer not null default 1,
+  input_tokens integer not null default 0, output_tokens integer not null default 0,
+  cache_write_tokens integer not null default 0, cache_read_tokens integer not null default 0,
+  created_at timestamptz not null default now()
+);
+```
+
+Which turns a question project #4 simply could not answer into a `group by`:
+
+<Terminal title="npm run ledger">
+{`  SPEND BY SERVER
+  ──────────────────────────────────────────────────────────
+  server        allowed  refused      spent  refused value
+  kitchen             8        5      13.0¢          24.2¢`}
+</Terminal>
+
+## The column people leave out
+
+Look at the right-hand one. **Refusals get ledger rows too**, with
+`actual_cents = 0`.
+
+<Callout type="lesson" title="A ledger with no refusals in it is indistinguishable from a ledger whose gate is switched off">
+  Both look like a tidy list of things that were allowed. And you would not
+  find out which one you had until the bill arrived.
+
+  The refused column is the only evidence that the gate is doing anything at
+  all. It is also the only way to answer *"is this ceiling too tight?"* — which
+  is a real question, and one you cannot ask if the near-misses were never
+  written down.
+</Callout>
+
+## Two schema decisions worth defending
+
+**`consumed_at timestamptz`, not a boolean.** *"Issued at 14:02, spent at
+14:03"* is a completely different story from *"issued and never used"*, and a
+boolean throws that distinction away. The cost of keeping it is one column.
+
+**`create table if not exists` will not add your new columns.** Pair every new
+column with its own `alter table ... add column if not exists` — this is
+project #4's gotcha 5, still true, and it fails silently: the table exists, so
+the statement succeeds, and the column simply isn't there.
+
+```sql
+alter table runs add column if not exists mode text not null default 'single';
+```
+
+## What this buys, in one number
+
+<StatGrid>
+  <Stat value="13" label="model calls servers asked for" note="across project #5's runs" />
+  <Stat value="13.0¢" label="allowed, and actually spent" note="8 requests" tone="ok" />
+  <Stat value="24.2¢" label="refused — estimated value" note="5 requests · $0.00 actually spent" tone="danger" />
+</StatGrid>
+
+Nearly twice as much was refused as was spent. Without the refused column that
+is an invisible fact, and the ceiling looks like an ornament.
