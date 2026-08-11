@@ -6,40 +6,48 @@ project: 4
 ---
 
 This is the part that stops it being a toy, and it is where the real
-engineering is.
+engineering in project #4 lives.
 
-## The assumption you didn't know you'd made
+## Part 1 · The assumption you didn't know you'd made
 
-Project #3's approval model has an assumption buried in it so obviously true
-that it is invisible:
+[Project #3's approval model](/learn/gate/pausing-is-an-array) has an
+assumption buried in it so obviously true that it is invisible:
 
 <Callout type="quote">
   The agent that hit the gate is the agent you are talking to.
 </Callout>
 
-The loop stops, the request ends, the browser shows a card, you click, a new
-request restarts *that same loop*.
+The loop stops, the request ends, your browser shows a card, you click, a new
+request restarts *that same loop*. One agent, one card, one resume. Every part
+of that design is correct and none of it survives delegation.
 
-Delegation destroys it completely. The agent that hits the gate is:
+Because now the agent that hits the gate is:
 
-- two levels down,
-- running inside a `Promise.all`,
-- alongside two siblings that are still working,
-- with nobody talking to it and no browser tab of its own.
+- **two levels down** in a tree
+- running inside a `Promise.all`
+- **alongside two siblings that are still working**
+- with nobody talking to it and no browser tab of its own
 
-And if each worker asked separately, you would get three cards at three
-different moments, out of order, each with no context.
+### And the naive fix is worse than not delegating
+
+If each worker asks separately, you get three cards at three different moments,
+out of order, each with no context. *"Approve `empty_jar {id:38}`?"* — from
+which worker? Based on what evidence? What about the other two?
 
 <Callout type="lesson" title="Five agents each interrupting you is worse than no delegation at all">
-  You delegated to stop having to hold the details. An approval flow that hands
-  you three context-free decisions has handed the details straight back — and
-  now you are making them under time pressure, out of order.
+  You delegated precisely so you would not have to hold the details. An
+  approval flow that hands you three context-free decisions has handed the
+  details **straight back** — and now you are making them under time pressure,
+  out of order, with less information than the agent had.
+
+  This is [click-fatigue](/learn/gate/default-allow) arriving through a
+  different door.
 </Callout>
 
-## So the pause travels up
+## Part 2 · So the pause travels up
 
 <Diagram
-  title="D7 · the approval bubbling up"
+  title="The approval bubbling up"
   caption="Worker 2 stops. The whole tree freezes — worker 1's finished report to partial_results, worker 2's entire mind to paused_children, the orchestrator's own state to messages. One card. The HTTP request ends. Minutes later a brand-new request rebuilds worker 2 and tells it yes — and worker 1 is never re-run."
 >
 {`sequenceDiagram
@@ -85,7 +93,7 @@ different moments, out of order, each with no context.
     O-->>H: final answer`}
 </Diagram>
 
-## Three details, and each one is a bug if you skip it
+## Part 3 · Three details, and each one is a bug if you skip it
 
 | The detail | What breaks without it |
 |---|---|
@@ -93,19 +101,22 @@ different moments, out of order, each with no context.
 | **`partial_results`** | Clicking Approve re-runs the two workers that had already finished. You pay for them twice, they may answer differently the second time, and any side effect happens again. |
 | **`paused_children`** | The stopped worker's entire conversation vanishes when the HTTP request ends, and there is nothing left to say yes *to*. |
 
-And the thing that makes all of it work is the same thing that made [project
-#3's pause](/learn/gate/pausing-is-an-array) work:
+Take the second one seriously for a moment. Without `partial_results`, approval
+is not idempotent **in the world** — it re-executes work that already happened.
+For jar inspections that means paying twice. For anything with a side effect it
+means doing it twice.
 
-<Callout type="quote">
-  The agent's whole state is its `messages` array. Persisting three agents is
+<Callout type="insight" title="And the third one is why this needed no new machinery">
+  A frozen worker is just its `messages` array. Persisting three agents is
   persisting three arrays.
+
+  No continuation, no serialised generator, no coroutine library — [the same
+  realisation as project #3](/learn/gate/pausing-is-an-array), applied three
+  times instead of once. The freeze is a `return` and the thaw is a function
+  call with a bigger array.
 </Callout>
 
-No continuation, no serialised generator, no coroutine library. The freeze is a
-`return` and the thaw is a function call with a bigger array — three times over
-instead of once.
-
-## The screen
+## Part 4 · The screen
 
 That single approval standing in front of three agents' worth of work is the
 picture the whole project is aiming at:
@@ -126,16 +137,26 @@ picture the whole project is aiming at:
 
 Nine calls. Three frozen agents. **One decision.**
 
-Note the three lines under each call. `asked by` is `origin`. `because` is the
-worker's own reasoning, carried up. `host rule` is the gate's `reason` from
-[project #3's rule list](/learn/gate/rules-read-arguments). Together they are
-enough to decide without going and reading three traces.
+Note the three lines under each call, because between them they are the whole
+argument for `origin`:
 
-## And it survives a partial no
+| Line | Comes from | Answers |
+|---|---|---|
+| `asked by` | `origin` | *which* worker wants this |
+| `because` | the worker's own reasoning, carried up | *why it thinks so* |
+| `host rule` | [the gate's `reason`](/learn/gate/hint-not-permission) | *why I am being asked at all* |
 
-Eight were approved and the ninth denied. The worker that got the "no" read it
-as an ordinary tool result, adapted, and reported honestly — and the
-orchestrator **surfaced it to the human** rather than quietly dropping it:
+Together they are enough to decide **without going and reading three traces** —
+which is the actual test of whether an approval UI works.
+
+## Part 5 · And it survives a partial no
+
+Eight were approved and the ninth denied.
+
+The worker that got the "no" read it as an ordinary tool result, adapted, and
+reported honestly — [exactly as the deny branch
+intends](/learn/gate/the-deny-branch). And the orchestrator **surfaced it to
+the human** rather than quietly dropping it:
 
 <Callout type="quote">
   One jar flagged but NOT emptied: Jar 59 — it does meet the tampering
@@ -144,31 +165,80 @@ orchestrator **surfaced it to the human** rather than quietly dropping it:
 </Callout>
 
 <Callout type="lesson" title="Verified against the database, not against the model's summary">
-  8 jars emptied, jar 59 untouched, zero false positives.
+  8 jars emptied, jar 59 untouched, **zero false positives**.
 
-  That distinction matters more than it sounds. The model's summary is a claim
-  about what happened. The `jar_events` table is what happened. When you are
-  checking whether an agent did the right thing, check the state — a
-  well-written summary of the wrong actions is the most convincing failure mode
-  there is.
+  That distinction matters more than it sounds. The model's summary is a *claim
+  about* what happened. The `jar_events` table **is** what happened.
+
+  When you are checking whether an agent did the right thing, check the state.
+  A well-written summary of the wrong actions is the most convincing failure
+  mode there is — it reads exactly like success.
 </Callout>
 
-## Rewinding a tree came free
+## Part 6 · Rewinding a tree came free
 
 Nested replay was the *stretch* goal. It cost one extra `select` and one
-expandable row — because of a decision in `lib/run-driver.ts`: **a sub-agent
-gets a real row in `runs`**, with a `parent_run_id`, and its own stream of
-`trace_events` under its own sequence numbers.
+expandable row.
 
-It is not a special kind of thing needing special handling. It is a **run with
-a parent**. So it already had a status, a stop reason, an iteration count and a
-token bill, for the same reason every other run does.
+Not because it was over-estimated, but because of a decision in
+`lib/run-driver.ts`: **a sub-agent gets a real row in `runs`**, with a
+`parent_run_id`, and its own stream of `trace_events` under its own sequence
+numbers.
+
+<Diagram
+  caption="One nullable self-reference turns a flat list of runs into a tree. Everything that already worked on a run — status, stop reason, iteration count, token bill, replay — worked on sub-agents on day one."
+>
+{`flowchart TB
+    subgraph DB["📓 one runs table"]
+        direction TB
+        P["run · parent_run_id = null · depth 0<br/><i>'find every tampered jar'</i><br/>13,303 tokens"]
+        C1["run · parent_run_id = P · depth 1<br/><i>'jars 1-20'</i> · 51 trace rows"]
+        C2["run · parent_run_id = P · depth 1<br/><i>'jars 21-40'</i> · 51 trace rows"]
+        C3["run · parent_run_id = P · depth 1<br/><i>'jars 41-60'</i> · 51 trace rows"]
+        P --> C1
+        P --> C2
+        P --> C3
+    end
+
+    DB --> Q["<b>one nullable self-reference</b><br/>turns a flat list of runs<br/>into a tree"]
+
+    style DB fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe
+    style P fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style Q fill:#052e16,stroke:#4ade80,color:#dcfce7`}
+</Diagram>
+
+A sub-agent is not a special kind of thing needing special handling. **It is a
+run with a parent.** So replaying one is `GET /api/runs?id=<childRunId>` — the
+same handler, recursing exactly the way the loop does.
+
+<Callout type="quote">
+  When the new feature turns out to be an instance of the old one, you get the
+  tooling for free.
+</Callout>
 
 <Callout type="insight" title="One deliberate UI choice">
   Each worker's trace is **collapsed by default**, and lazy-loaded.
 
   Delegation exists so the details of twenty jar inspections do not have to be
-  in anybody's head — not the orchestrator's, and not yours. The summary is
-  what you normally need. The full trace is there for the ten percent of the
+  in anybody's head — not the orchestrator's, and **not yours**. The summary is
+  what you normally need; the full trace is there for the ten percent of the
   time when "trust me" isn't good enough.
+
+  An interface that expanded everything by default would be undoing the feature
+  it was built to display.
 </Callout>
+
+## What you now know
+
+- Project #3's gate assumed **the agent that stopped is the one you are talking
+  to**, and delegation destroys that.
+- Three separate cards would hand the details back to you — worse than not
+  delegating.
+- The pause **bubbles up** and freezes the whole tree: `origin`,
+  `partial_results`, `paused_children`.
+- Without `partial_results`, approving **re-executes finished work**.
+- The card needs *who asked*, *why they think so*, and *why you are being
+  asked* — enough to decide without reading traces.
+- Verify against **the database**, not the model's summary.
+- A sub-agent is a **run with a parent**, which is why nested replay was
+  nearly free.

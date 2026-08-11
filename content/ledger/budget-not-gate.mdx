@@ -5,34 +5,52 @@ summary: "The same tool costs 0.22¢ or 6.0¢ depending on its arguments. So the
 project: 5
 ---
 
-Something can now spend your money. You need a rule. There are two tempting
-ones, and both are wrong in an instructive way.
+Something can now spend your money. You need a rule.
 
-## Tempting design #1 — a budget
+There are two tempting ones, and both are wrong in an instructive way. Working
+out *why* is how you arrive at the third.
+
+## Part 1 · Tempting design #1 — a budget
 
 Give the run a spending limit. Subtract as you go. Stop at zero.
+
+```ts
+// ❌
+budget -= cost;
+if (budget <= 0) throw new Error("out of budget");
+```
 
 It is worse than it looks, and the reason has nothing to do with arithmetic.
 
 <Callout type="gotcha" title="A budget that runs out silently truncates">
-  You do not get a *decision*. You get an arbitrary cut-off point determined by
-  the order things happened to occur in.
+  You do not get a **decision**. You get an arbitrary cut-off point determined
+  by the order things happened to occur in.
 
   The run stops halfway through whatever it was doing, having spent all of the
-  money and produced part of an answer. Nobody chose that. Nobody was asked.
+  money and produced part of an answer. Nobody chose that moment. Nobody was
+  asked. And the same job, run twice, stops in two different places.
 </Callout>
 
-A budget is an accounting device. It tells you how much is left. It is not a
-place where a decision gets made, and pretending it is one means the most
-consequential moment in the run — the moment you stop — happens by accident.
+A budget is an **accounting device**. It tells you how much is left. It is not
+a place where a decision gets made — and pretending it is one means the most
+consequential moment in the run happens by accident.
 
-## Tempting design #2 — project #3's gate
+<Callout type="insight" title="Which does not mean you don't want one">
+  Project #4's `MAX_TREE_TOKENS` is exactly this, and it is correct — as a
+  **backstop**. Its job is to make "this run cannot possibly exceed X" true.
+
+  A backstop that fires is a bug you have already had. It should never be the
+  thing making routine decisions.
+</Callout>
+
+## Part 2 · Tempting design #2 — project #3's gate
 
 Gate on *what* the call is. That worked beautifully for destruction:
 `smash_jar` always asks, `jar_history` never does.
 
 It works because **destruction is a property of the verb.** A tool that deletes
-things deletes things every time you call it. The name tells you.
+things deletes things every time you call it. The name tells you, and [reading
+the arguments](/learn/gate/rules-read-arguments) covers the rest.
 
 Cost is not like that. And project #5 can prove it with a single tool:
 
@@ -48,16 +66,25 @@ Cost is not like that. And project #5 can prove it with a single tool:
 </StatGrid>
 
 Twenty-seven times the price, same name. A rule keyed to `summarise_week` would
-have to stop **both** or allow **both**, and neither of those is what you want.
+have to stop **both** or allow **both**, and neither is what you want.
 
-<Callout type="lesson">
-  Cost lives in the arguments, not the verb. This is project #3's
-  *"rules read arguments, not names"* lesson arriving again from a completely
-  different direction — and it is a stronger version, because here even reading
-  the arguments isn't enough. You have to price them.
+### And reading the arguments does not rescue it either
+
+You could write `matches: (args) => args.depth === "deep"`. That works — for
+exactly this server, on exactly this tool, until somebody adds a `depth:
+"exhaustive"`, or the pantry grows from 60 jars to 600 and `brief` quietly
+becomes expensive.
+
+<Callout type="lesson" title="The argument is not the cost. It is a proxy for the cost.">
+  Project #3's rules could match on arguments because `action: "eat"` **is**
+  the dangerous thing. Here, `depth: "deep"` merely *correlates* with the
+  dangerous thing.
+
+  What you actually care about is the consequence — and the consequence has to
+  be **computed**, not matched.
 </Callout>
 
-## So the rule is a number
+## Part 3 · So the rule is a number
 
 ```text
 below the ceiling   →  runs immediately, logged to the ledger
@@ -76,8 +103,16 @@ Because **a server is the unit of trust.**
 > once and never audited: nothing."*
 
 That is a sentence you can actually reason about. One global budget cannot
-express it — and worse, under a single pot a compromised server eats everyone
-else's headroom before anybody notices.
+express it — and worse, under a single pot **a compromised server eats
+everybody else's headroom** before anybody notices.
+
+<Callout type="insight" title="Per-server also matches how trust actually accrues">
+  You do not trust "requests" or "tools". You trust *the people who wrote that
+  server*, and you revise that judgement as a unit when something goes wrong.
+
+  A control whose granularity matches how you actually think is a control you
+  will keep configured correctly.
+</Callout>
 
 ### The estimate is what makes a refusal free
 
@@ -93,30 +128,98 @@ refuses, the host has not contacted the model at all.
 </Callout>
 
 Project #3's gate saved you from a destroyed cookie jar. This one saves you
-from **the bill itself**. That is not a nice detail — it is the argument for
-gating on price rather than on which tool was called.
+from **the bill itself** — and that asymmetry is the actual argument for gating
+on price rather than on which tool was called. A destructive-action gate that
+fires has already cost you the tokens of getting there. A price gate that fires
+has cost you nothing.
 
-## Two more numbers the gate holds
+## Part 4 · The gate you can unit-test
+
+One property worth calling out, because it is a deliberate choice and it is why
+this control is actually exercised.
+
+```ts
+export function classifySpend(
+  request: SpendRequest,
+  context: SpendContext = {},
+): SpendVerdict
+```
+
+It is **not async**. It does not read the database. It does not touch the
+network. Everything it needs is passed in.
+
+<Callout type="lesson" title="A gate you can call in a unit test with a literal object is a gate people actually test">
+  This one is scored by the eval suite — `gate-refuses-expensive` is one of
+  project #5's three new cases — and that is only possible because there is
+  nothing to stand up.
+
+  **The security control that is hard to exercise is the security control
+  nobody exercises.** If your authorization logic needs a database and three
+  services to answer a question, it will be tested once, by hand, in staging.
+</Callout>
+
+## Part 5 · Two more numbers the gate holds
 
 A ceiling on its own is not enough, and both of these are project #4's
 seatbelts wearing new hats.
 
 | Control | Value | Why |
 |---|---|---|
-| **Output clamp** | `1024` tokens | A server may ask for whatever `maxTokens` it likes. It gets this or less. `maxTokens: 1000000` is a denial-of-wallet attack that arrives looking exactly like a JSON field. |
-| **Per-run quantity cap** | `12` sampling requests | A per-call ceiling with no total is a machine for making a thousand cheap calls. Nineteen requests at 1.9¢ each, every one of them under a 2¢ ceiling, is 36¢ nobody approved. |
+| **Output clamp** | `1024` tokens | A server may ask for whatever `maxTokens` it likes. It gets this or less. `maxTokens: 1_000_000` is a denial-of-wallet attack that arrives looking exactly like a JSON field. |
+| **Per-run quantity cap** | `12` sampling requests | A per-call ceiling with no total is a machine for making a thousand cheap calls. Nineteen requests at 1.9¢ each, every one under a 2¢ ceiling, is 36¢ nobody approved. |
 
 The quantity cap is checked **first**, before the price — because a server
 making its thirteenth cheap request is a runaway regardless of how cheap each
 one was.
 
 <Callout type="warning" title="And the multi-round-trip makes that cap more necessary, not less">
-  Every sampling request costs the agent a full retry of the tool call. So a
-  server that asks repeatedly burns your **iteration budget** as well as your
-  money — two seatbelts strained by one behaviour.
+  Every sampling request costs the agent **a full retry of the tool call**. So
+  a server that asks repeatedly burns your **iteration budget** as well as your
+  money — two different seatbelts strained by one behaviour.
+</Callout>
+
+## Part 6 · Estimate high, bill honestly
+
+One last detail, and it is the only file in the repo whose correctness
+*expires*.
+
+`lib/pricing.ts` holds the price table. Sonnet 5 was on an introductory rate
+with an end date. Hard-code the discounted number and every downstream
+calculation reports to two decimal places, with total confidence, and is wrong
+from the day the discount ends.
+
+So: encode both rates and the date the intro ends, and stamp
+`PRICES_CHECKED_ON` where the UI and the checkpoint scripts print it.
+
+<Callout type="lesson" title="And the load-bearing half">
+  **The gate reasons in standard prices while the ledger records effective
+  ones.**
+
+  A ceiling computed with a temporary discount **silently loosens** the day the
+  discount ends — you would be allowing calls you never intended to allow, and
+  nothing would change in your config to tell you.
+
+  Estimate high, bill honestly. And when a value has an expiry date, make the
+  expiry date part of the value.
 </Callout>
 
 Now for the part that took longest to get right: this gate cannot do the one
 thing project #3's gate was built around.
 
 [The gate that cannot pause →](/learn/ledger/gate-cannot-pause)
+
+## What you now know
+
+- A **budget** truncates at an arbitrary point; it is a backstop, not a
+  decision.
+- **Destruction is a property of the verb; cost is not.** The same tool is
+  0.22¢ or 6.0¢.
+- Matching on arguments only *correlates* with cost — the consequence has to be
+  computed.
+- Ceilings are **per server**, because a server is the unit of trust and a
+  shared pot lets one server eat everyone's headroom.
+- Gating on the **estimate** is what makes a refusal cost `$0.00`.
+- Keep the gate **synchronous and dependency-free** so it can actually be
+  tested.
+- Clamp output, cap quantity, and make a price table's expiry date part of the
+  value.
