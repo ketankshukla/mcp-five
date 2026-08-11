@@ -7,104 +7,210 @@ project: 4
 
 Every tool in projects #1 through #3 lived on an MCP server at the end of an
 HTTP connection. That uniformity was quietly load-bearing: the host could treat
-"run a tool" as "make a request."
+*"run a tool"* as *"make a request"*, and nothing else had to know the
+difference.
 
-`spawn_agent` breaks it.
+`spawn_agent` breaks it, and the way it breaks it is instructive.
 
-It has to call back into **this** loop, holding **this** run's budget and
-identity, emitting into **this** run's trace. None of that survives a trip over
-the wire — you cannot serialise a `TreeBudget` that three other agents are
-concurrently drawing from and expect the arithmetic to still be true.
+## Part 1 · Why it cannot be a server tool
 
-So the loop learns about **local tools**: tools the host implements itself.
+Look at what `spawn_agent` needs in order to do its job:
 
-## And that is a security boundary
+```ts title="lib/crew.ts"
+async run(args, context) {
+  for await (const event of runAgentLoop({
+    messages: [{ role: "user", content: briefing(args.task) }],
+    toolbox: context.toolbox,   // ← this run's servers
+    gate:    true,              // ← this run's approval rules
+    delegate: false,
+    budget:  context.budget,    // ← THIS RUN'S WALLET, by reference
+  })) {
+    context.emit(event);        // ← this run's live event stream
+    if (event.type === "done") return event.finalText;
+  }
+}
+```
 
-The distinction is worth keeping sharp, because it is not just about where the
-code runs.
+Four things from `context`, and **not one of them survives a trip over the
+wire**:
 
-| | an MCP tool | a local tool |
-|---|---|---|
-| runs | on a machine you don't control | **inside your host** |
-| privileges | whatever that server has | **whatever your host has** |
-| how many in project #4 | 11 | 1 |
+| What it needs | Why HTTP cannot carry it |
+|---|---|
+| `context.toolbox` | live client connections to three servers |
+| `context.budget` | a **shared mutable object** three other agents are drawing from concurrently |
+| `context.emit` | a callback into an async generator that is currently running |
+| `gate` | the host's own rule list, which by definition is not the server's business |
 
-<Callout type="lesson" title="A local tool runs with your host's privileges">
-  Your host holds the API key, the database credential, the shared MCP token,
-  and the loop's own control flow. An MCP tool has none of those and can only
-  ask.
+The budget is the clearest one. You could serialise a `TreeBudget` and send it,
+but the moment you do, it is a *copy* — and the whole point of
+`MAX_TREE_TOKENS` is that every agent draws from **the same object**, so that
+*"the whole run stops at 600,000 tokens"* is true rather than approximately
+true.
 
-  So the bar for adding a local tool is much higher than for adding a server
-  tool, and the count is worth keeping visible. **Eleven and one** is a healthy
-  ratio. Eleven and eleven would be a host that has quietly become an
-  unsandboxed plugin system.
+<Callout type="lesson" title="Some things cannot be a network call, and the tell is shared mutable state">
+  If two parties must observe the *same* mutating value at the *same* instant,
+  a network boundary between them is not an implementation detail you can
+  paper over. You get a copy, and copies diverge.
+
+  So the loop learns about a second kind of tool: **local tools**, implemented
+  by the host itself.
 </Callout>
 
-Project #4 has exactly one, and it is `spawn_agent`. Project #5 adds none.
+## Part 2 · And that is a security boundary
 
-## The fiddliest twenty lines in the repo
+The distinction is not just about where code runs. It is about what the code
+can reach.
 
-There is a genuinely awkward problem hiding in "forward its trace upward."
+<Compare
+  leftLabel="An MCP tool"
+  rightLabel="A local tool"
+  left={<><p>Runs on <strong>a machine you don&apos;t control</strong>.</p><p>Has whatever privileges that server has — which is <em>none of yours</em>.</p><p>Can only ask. Everything it returns is text you chose to accept.</p><p>Project #4 has <strong>11</strong>.</p></>}
+  right={<><p>Runs <strong>inside your host</strong>.</p><p>Has <strong>whatever privileges your host has</strong> — the API key, the database credential, the shared MCP token, the loop&apos;s own control flow.</p><p>Project #4 has <strong>1</strong>.</p></>}
+/>
 
-A sub-agent produces a whole trace *while the parent is sitting inside*
-`await Promise.all(...)`. And an async generator **cannot `yield` from inside a
-callback**, and cannot yield while parked on an await.
+<Callout type="warning" title="The bar for adding a local tool is much higher, and the count is worth keeping visible">
+  Eleven and one is a healthy ratio. Eleven and eleven would be a host that has
+  quietly become an unsandboxed plugin system, where every "tool" is arbitrary
+  code with your credentials.
 
-Do the obvious thing and the UI shows nothing for forty seconds and then
-everything at once.
-
-<Callout type="gotcha" title="You cannot yield from inside a callback">
-  This is a property of async generators, not a bug you can work around by
-  restructuring the `Promise.all`. The events exist; there is simply no legal
-  place to hand them out from.
+  Project #4 adds exactly one local tool. Project #5 adds none.
 </Callout>
 
-The fix is a buffer plus a doorbell:
+There is a useful question to ask before adding one: *could this be done by a
+server, if I were willing to pass it what it needs?* If yes, make it a server
+tool and pass the data explicitly — you lose nothing and you keep the boundary.
+`spawn_agent` genuinely fails that test, which is what earns it the exception.
+
+## Part 3 · The fiddliest twenty lines in the repo
+
+There is a real problem hiding in `context.emit`.
+
+A sub-agent produces a whole trace — tool calls, results, iterations — **while
+the parent is sitting inside `await Promise.all(...)`**. Those events need to
+reach the UI as they happen, so the user sees three lanes moving.
+
+But the parent is an **async generator**, and an async generator has two hard
+rules:
+
+- it cannot `yield` from inside a callback
+- it cannot `yield` while it is parked on an `await`
+
+<Callout type="gotcha" title="Do the obvious thing and the UI shows nothing for forty seconds, then everything at once">
+  This is not a bug you can restructure away by rearranging the `Promise.all`.
+  The events exist; there is simply **no legal place to hand them out from**
+  while the generator is suspended.
+</Callout>
+
+### The fix is a buffer plus a doorbell
 
 ```ts title="lib/crew.ts"
 const queue = createEventQueue<LoopEvent>();
-const running = Promise.all(toolUses.map(runOne));   // pushes into the queue
+
+// workers push into the queue from wherever they are
+const running = Promise.all(toolUses.map(runOne));
+
+// close the queue when they finish — on BOTH paths
 void running.then(() => queue.close(), () => queue.close());
 
-for await (const event of queue) yield event;        // drain while they work
+// the generator drains the queue, which it CAN legally yield from
+for await (const event of queue) yield event;
+
 const outcomes = await running;
 ```
 
-The workers push into the queue from wherever they are. The generator drains
-the queue, which it *can* legally yield from. And `queue.close()` is wired to
-both the resolve and reject paths, because a queue that only closes on success
-hangs forever the first time a worker throws.
+Walk it:
+
+1. `createEventQueue` is an async iterable with a `push` and a `close`. Pushing
+   is an ordinary function call, so a callback can do it.
+2. The workers start. They push events as they go. Nobody is yielding yet.
+3. The generator does `for await (const event of queue)` — it is now
+   suspended **on the queue**, not on the workers, and every push wakes it up
+   to yield one event.
+4. When all workers settle, the queue closes, the `for await` ends, and the
+   generator moves on.
+
+<Callout type="warning" title="`queue.close()` is wired to BOTH the resolve and the reject path">
+  ```ts
+  void running.then(() => queue.close(), () => queue.close());
+  ```
+
+  A queue that only closes on success hangs forever the first time a worker
+  throws. The `for await` waits for an event that is never coming, the parent
+  never resumes, and the request times out with no error anywhere — because
+  the actual error was swallowed by an unhandled rejection.
+
+  Two arguments to `.then`, and one of them is the entire difference between a
+  bug you find in ten seconds and one you find in an hour.
+</Callout>
 
 <Checkpoint>
-  Run the crew demo and watch three lanes update **while** they are working,
-  rather than appearing all at once at the end.
+  Run the crew demo and watch three lanes update **while** the workers are
+  working, rather than appearing all at once at the end.
 
   If your parallel work goes silent and then reports in a lump, this is the
   shape of the fix.
 </Checkpoint>
 
-<Callout type="insight" title="Those twenty lines earn their keep a second time">
-  Project #5's sampling handler is built **inside** the tool-running block of
-  `runAgentLoop`, and that placement is not arbitrary — it needs `emit`.
+## Part 4 · Those twenty lines get used twice
 
-  A server's sampling request happens *inside* a tool call, so getting a "the
-  kitchen is asking to spend 6.0¢" event out to the UI is exactly the same
-  problem as getting a worker's trace out. `createEventQueue` was already
-  there, for a completely unrelated feature.
+The best evidence that `createEventQueue` was the right abstraction is that a
+completely unrelated feature needed it a year later.
+
+In project #5, a **server** can ask the host to run a model call. That request
+arrives *inside* a `tools/call` — which means it happens inside the
+tool-running block of `runAgentLoop`, in exactly the same place the workers
+run.
+
+To show the user *"the kitchen is asking to spend 6.0¢"*, that event has to get
+out of a callback and into the generator's `yield`.
+
+<Callout type="insight" title="Same problem, same twenty lines, different feature">
+  This is why project #5's sampling handler is built **inside** the tool-running
+  block rather than somewhere tidier. It is not arbitrary placement — it needs
+  `emit`, and `emit` only works there.
+
+  A good abstraction is one that turns out to fit a problem you had not thought
+  of when you wrote it.
 </Callout>
 
-## What a local tool looks like to the model
+## Part 5 · What a local tool looks like to the model
 
 Nothing special. That is the point.
 
-It appears in `tools/list` output alongside the eleven MCP tools, with a name,
-a description and an input schema. The model picks it the same way it picks any
+It appears in the tool list alongside the eleven MCP tools, with a name, a
+description and an input schema. The model picks it the same way it picks any
 other tool, for the same reason: **the description convinced it.**
 
-The only thing that differs is the dispatch — the toolbox recognises the name
-as local and calls a function instead of making an HTTP request.
+```ts
+{
+  name: "spawn_agent",
+  description:
+    "Delegate a self-contained sub-task to a fresh agent with its own context " +
+    "window. Use when a job has many independent pieces — the worker reports " +
+    "back a short summary, not a transcript. Prefer this over inspecting " +
+    "hundreds of items yourself.",
+  inputSchema: z.object({ task: z.string() }),
+}
+```
+
+The only thing that differs is dispatch: the toolbox recognises the name as
+local and calls a function instead of making an HTTP request.
 
 <Callout type="quote">
   Servers propose. The host disposes. A local tool is the host proposing to
   itself.
 </Callout>
+
+## What you now know
+
+- A tool must be **local** when it needs shared mutable state, live
+  connections, or a callback into the running loop — things a copy cannot
+  provide.
+- Local tools run with **your host's privileges**, so the bar for adding one is
+  much higher than for a server tool. Keep the count visible.
+- An async generator cannot `yield` from a callback, so parallel work needs a
+  **queue plus a doorbell** to stream events live.
+- Close that queue on the **reject** path too, or one throwing worker hangs the
+  whole request silently.
+- To the model, a local tool is indistinguishable from any other — the
+  description is still the entire interface.

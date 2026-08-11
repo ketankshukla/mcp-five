@@ -5,30 +5,55 @@ summary: "240 jars, 0 of 36 found, 439k tokens. A failing agent is expensive pre
 project: 4
 ---
 
-Project #3's agent handles one cookie jar beautifully. So project #4 gave it a
-pantry: **sixty jars**, each needing its own inspection, one jar per tool call,
-each report about 250 tokens of seal state, weights, notes and movement log.
-Nine have been tampered with, and the rule for spotting one has two clauses and
-an exception.
+Project #3's agent handles one cookie jar beautifully. Project #4 gives it a
+pantry and finds out where it stops working.
 
-At sixty jars, it just… did it. Perfectly. Four iterations, every jar
-inspected, all nine found, nothing innocent touched.
+This page is the measurement. It is worth reading even if you never build a
+sub-agent, because the mechanism it uncovers is a property of **every** agent
+loop, including yours.
 
-<Callout type="insight" title="Which was not the expected result, and that is worth saying">
-  The premise — *"sixty verbose reports is too much for one context window"* —
-  was simply **wrong**. It is about 15,000 tokens, and the model batched the
-  inspections twenty at a time.
+## Part 1 · The exam
 
-  A finding that kills your premise on stage 5 is a good outcome. The honest
-  move is to stop asserting where the ceiling is and go and find it.
+Sixty jars. Each needs its own inspection — one jar per tool call — and each
+report is about 250 tokens of seal state, weights, notes and a movement log.
+
+Nine have been tampered with. The rule for spotting one has two clauses and an
+exception, so it cannot be pattern-matched from the jar id.
+
+The job: *find every tampered jar, and empty only those.*
+
+### At sixty jars, it just did it
+
+Perfectly. Four iterations, every jar inspected, all nine found, nothing
+innocent touched.
+
+<Callout type="insight" title="Which was not the expected result, and that is the most useful thing on this page">
+  The whole project was premised on *"sixty verbose reports is too much for one
+  context window."*
+
+  That premise was **wrong**. Sixty reports is about 15,000 tokens, and the
+  model batched the inspections twenty at a time. It was never close to a
+  limit.
+
+  A version of this project that shipped sixty jars and a celebratory README
+  would have been demonstrating a feature that, at the size it shipped, **made
+  no measurable difference at all.**
 </Callout>
 
-So the pantry got a dial, and it was turned up to 240.
+The honest move is to stop asserting where the ceiling is and go and find it.
+Make the pantry size a variable, keep the exam identical at every size — the
+same rule, the same decoys, repeating every sixty jars — and turn it up.
 
-## This is what the ceiling looks like
+```bash
+PANTRY_JARS=240 npm run db:init
+PANTRY_JARS=240 npm run dev
+PANTRY_JARS=240 npm run compare
+```
+
+## Part 2 · At 240 jars, here is the ceiling
 
 <Diagram
-  title="D6 · one agent at 240 jars"
+  title="One agent at 240 jars"
   caption="Not wrong. Not crashed. Not stuck. It ran out of room, and it charged full price on the way there."
 >
 {`flowchart TB
@@ -58,35 +83,75 @@ So the pantry got a dial, and it was turned up to 240.
   <Stat value="248k" label="tokens the crew spent" note="correct AND ~0.56× the price" tone="ok" />
 </StatGrid>
 
+### Notice what kind of failure that is
+
+It is not wrong — it did not identify the wrong jars. It is not crashed. It is
+not stuck in a loop. Every individual tool call succeeded.
+
+**It ran out of room, and it charged full price on the way.**
+
 <Callout type="quote">
   A failing agent is expensive precisely because it fails slowly.
 </Callout>
 
-## You cannot fix this with a better prompt
+A crash is cheap: it happens immediately and you know. This ran for ten
+iterations, did real work, produced a plausible-looking partial trace, and
+delivered nothing — having spent more than the successful run would have cost.
 
-Because it is not a prompt problem. It is a **shape** problem.
+## Part 3 · Why, and it is not the reason people give
 
-And the mechanism is not the one people usually reach for. It is not that the
-task is too hard, or that the model gets confused, or that 240 is too many
-things to hold in mind.
+The intuitive story is *"240 things is too many for the model to think about."*
+That is not what happened, and the real mechanism matters more.
 
-<Callout type="lesson" title="The single agent fails expensively because it re-sends everything it has read on every iteration">
-  All 240 inspection reports ride along in the conversation, growing every trip
-  around the loop.
+Go back to [the meter](/learn/host/the-meter). Every iteration re-sends the
+**entire conversation**. And by iteration 8, that conversation contains
+**every inspection report the agent has read so far**.
 
-  Its **cost grows with the square of the job while its capacity stays fixed.**
-  It runs out of iterations long before it runs out of things to inspect, and
-  it has paid full price for every re-read along the way.
+| Iteration | Jars inspected so far | Roughly what gets re-sent |
+|---|---|---|
+| 2 | 20 | 5,000 tokens of reports |
+| 4 | 60 | 15,000 |
+| 6 | 120 | 30,000 |
+| 8 | 180 | 45,000 |
 
-  This is [The meter](/learn/host/the-meter)'s superlinear-cost observation,
-  arriving with a bill attached.
+Add those up rather than reading them individually — because you pay each row,
+not the last one. That is where 439,000 goes.
+
+<Callout type="lesson" title="Its cost grows with the square of the job while its capacity stays fixed">
+  The agent has ten iterations. Each iteration can inspect about twenty jars.
+  So its **capacity** is roughly fixed at 200 jars regardless of how much money
+  you spend.
+
+  Meanwhile its **cost** grows quadratically, because it re-reads everything it
+  has already read on every single trip.
+
+  Those two curves cross. At 60 jars you are comfortably under. At 240 you have
+  paid four times as much to finish less of the job.
 </Callout>
 
-## The kitchen
+### Which is why you cannot fix it with a better prompt
 
-A head chef does not cook faster. They do something different: split the work,
-hand pieces to other cooks, and keep only the **plan** in their own head
-instead of every detail. The details live with whoever is doing that piece.
+There is no wording that makes an agent stop re-sending its own conversation.
+It is not a prompt problem. **It is a shape problem** — one pair of hands, one
+head, everything in sequence, and a bill that compounds.
+
+Raising `MAX_ITERATIONS` does not fix it either. It buys linear capacity at
+quadratic cost, which is exactly the wrong trade.
+
+<Callout type="insight" title="MAX_ITERATIONS was deliberately left at ten">
+  The obvious response to "it hit the iteration cap" is to raise the cap.
+
+  It was left at ten, because raising it would have **hidden the effect being
+  measured**. The point was to find where a single context window stops
+  working, and moving the ceiling every time you touch it means you never find
+  out where it is.
+</Callout>
+
+## Part 4 · The kitchen
+
+A head chef does not cook faster. They do something structurally different:
+split the work, hand pieces to other cooks, and keep only the **plan** in their
+own head. The details live with whoever is doing that piece.
 
 <Diagram
   caption="Three workers each carry 80 reports and finish. The orchestrator only ever sees three paragraphs — and it brings all 36 destructive calls to a single approval."
@@ -113,50 +178,85 @@ instead of every detail. The details live with whoever is doing that piece.
     style WIN fill:#052e16,stroke:#4ade80,stroke-width:2px,color:#dcfce7`}
 </Diagram>
 
-<Callout type="insight" title="And the reason the crew gets further is structural, not motivational">
-  It is not that three agents are somehow smarter.
+<Callout type="insight" title="The reason the crew gets further is structural, not motivational">
+  It is **not** that three agents are somehow smarter than one.
 
   **Each worker gets its own fresh context and its own fresh ten-iteration
   budget.** Three workers with ten iterations each is thirty iterations of
-  capacity where one agent had ten — and none of them is carrying the other
-  two's jar reports around.
+  capacity where one agent had ten — and, more importantly, none of them is
+  carrying the other two's jar reports around.
+
+  Each worker's conversation grows to 80 reports and stops. The orchestrator's
+  grows to three paragraphs.
 </Callout>
 
-## How solid are these numbers?
+<Callout type="quote">
+  A single context window makes you pay for everything you have already read,
+  over and over. Splitting the work is how you stop re-reading.
+</Callout>
+
+## Part 5 · How solid are these numbers?
 
 Stated plainly, because the honest version of this table is more useful than
-the tidy one.
+the tidy one — and because [project #4 has already been burned once by a
+confidently-wrong figure](/learn/crew/measurement-trap).
 
 | Row | Confidence |
 |---|---|
-| **60 jars, accuracy** | Solid. Three attempts per case, both modes, 100% in both — 6/6 one agent, 12/12 crew. |
-| **60 jars, cost** | The softest number here. Two attempts of the one case both modes run identically; the run-to-run spread (85k–99k single, 74k–83k crew) is a meaningful fraction of the gap. **"A wash"** is as strong a claim as the data supports. |
-| **240 jars** | A single attempt per mode, plus a standalone probe that independently agreed. The direction is not in doubt — one mode finished and the other emptied nothing — but treat the magnitudes as one significant figure. |
+| **60 jars, accuracy** | **Solid.** Three attempts per case, both modes, 100% in both — 6/6 one agent, 12/12 crew. |
+| **60 jars, cost** | **The softest number here.** Two attempts of the one case both modes run identically, and the run-to-run spread (85k–99k single, 74k–83k crew) is a meaningful fraction of the gap. **"A wash"** is as strong a claim as this data supports. |
+| **240 jars** | A **single attempt per mode**, plus a standalone probe that independently agreed. The direction is not in doubt — one mode finished the job and the other emptied nothing — but treat the magnitudes as one significant figure. |
 
-The compare run and the standalone probe give slightly different totals
-(440,517 / 245,948 versus 439k / 248k). Both are real; they are different runs.
-This site quotes the probe figures because those are the ones the source
-README's headline table uses.
+The compare run and the standalone probe give slightly different totals —
+440,517 / 245,948 versus 439k / 248k. Both are real; they are different runs.
+This site quotes the probe figures because those are what the source README's
+headline table uses.
 
-<Callout type="warning" title="And the first version of this comparison was wrong">
-  It said the crew cost **1.7×** at 60 jars and concluded "delegation is pure
-  overhead." Every individual number in that report was accurate. The division
-  was the lie.
+<Callout type="warning" title="Tightening the 240-jar row costs about a million tokens">
+  `PANTRY_JARS=240 npm run compare -- --attempts 3` would do it.
 
-  That story is [The measurement trap](/learn/crew/measurement-trap), and it is
-  the most useful page in this section.
+  That is the honest reason it is one attempt: the measurement is expensive
+  enough that its own cost is a design constraint. Worth saying out loud rather
+  than presenting one run as though it were three.
 </Callout>
 
-## The crossover is a property of your job
+## Part 6 · The crossover is a property of *your* job
 
-Not of agents in general. It depends on how big each tool result is, how many
-calls the job needs, and how tight your iteration cap is.
+Not of agents in general.
 
-So the useful skill is not *"know that delegation is good."* It is **knowing
-how to find your own crossover** — which is a script you can run, not an
-opinion you can hold:
+Whether delegation helps depends on three things, all of which are about your
+workload rather than about the technique:
 
-```bash
-npm run compare -- --attempts 5
-PANTRY_JARS=240 npm run compare
-```
+| Factor | Pushes crossover **earlier** | Pushes it **later** |
+|---|---|---|
+| size of each tool result | large (250-token reports) | small (a number) |
+| number of calls the job needs | many | few |
+| iteration cap | tight | generous |
+
+<Callout type="lesson" title="So the useful skill is not 'know that delegation is good'">
+  It is **knowing how to find your own crossover** — which is a script you can
+  run, not an opinion you can hold.
+
+  ```bash
+  npm run compare -- --attempts 5
+  PANTRY_JARS=240 npm run compare
+  ```
+
+  Same model, same prompt, same toolbox, same gate, same seatbelts. **One flag
+  differs.** That is the whole experimental design, and it is the part worth
+  copying.
+</Callout>
+
+## What you now know
+
+- The premise was wrong at 60 jars, and finding that out on stage 5 was the
+  cheapest possible outcome.
+- At 240 jars a single agent found **0 of 36** and spent **439k tokens** — not
+  crashed, just out of room at full price.
+- The mechanism is **re-reading**: cost grows quadratically while capacity
+  stays fixed, so the two curves cross.
+- You cannot prompt your way out of it, and raising the iteration cap buys
+  linear capacity at quadratic cost.
+- A crew wins **structurally** — fresh context and a fresh budget per worker —
+  not because more agents are smarter.
+- The crossover is a property of your job. Measure it; do not assume it.

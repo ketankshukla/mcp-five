@@ -9,46 +9,91 @@ There is an official SDK. Project #2 does not use it for the client half, on
 purpose.
 
 `lib/mcp-client.ts` is about two hundred lines of `fetch`. The point of the
-series is that the protocol is just JSON, and you do not really believe that
-until you have written the thing that speaks it.
+series is that the protocol is just JSON, and **you do not really believe that
+until you have written the thing that speaks it.**
 
-<Callout type="lesson" title="It also survives contact">
-  That hand-written client is inherited unchanged by projects #3 and #4, and
+<Callout type="lesson" title="And it survived contact, which is the real argument">
+  That hand-written client is inherited unchanged by projects #3 and #4, then
   extended in project #5 to speak **both protocol eras** — something that would
   have been a very different conversation if the transport had been somebody
-  else's abstraction.
+  else's abstraction with somebody else's release schedule.
 
-  Writing it yourself is not always the answer. It was here, because the thing
-  being wrapped is genuinely small and the thing you learn is the subject.
+  Writing it yourself is not always right. It was here, because the thing being
+  wrapped is genuinely small and the thing you learn is the subject of the
+  course.
 </Callout>
 
-## Bite #1 — the Accept header
+## Part 1 · The client, in outline
 
-```ts
-headers: {
-  "Content-Type": "application/json",
-  Accept: "application/json, text/event-stream",   // BOTH. always.
+Strip out the era handling and error mapping and it is this:
+
+```ts title="lib/mcp-client.ts — the shape"
+async function call(server: Server, method: string, params?: unknown) {
+  const res = await fetch(server.url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",   // ← both. always.
+      ...(server.token ? { Authorization: `Bearer ${server.token}` } : {}),
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: nextId(),
+      method,
+      params,
+    }),
+  });
+
+  if (!res.ok) throw new Error(`${server.name}: HTTP ${res.status}`);
+
+  const type = res.headers.get("content-type") ?? "";
+  const payload = type.includes("text/event-stream")
+    ? await readSse(res)          // ← the other half
+    : await res.json();
+
+  if (payload.error) throw new Error(`${server.name}: ${payload.error.message}`);
+  return payload.result;
 }
 ```
 
+That is genuinely most of it. `tools/list` is `call(server, "tools/list")`.
+`tools/call` is `call(server, "tools/call", { name, arguments })`.
+
+## Part 2 · Bite #1 — the `Accept` header
+
+```ts
+Accept: "application/json, text/event-stream"
+```
+
 List only `application/json` and you get a bare **`406 Not Acceptable`**. No
-body worth reading, no hint about which header it disliked, and a status code
-that suggests you asked for something unreasonable rather than that you forgot
-to mention a second content type you weren't planning to use.
+useful body, no hint about which header it disliked, and a status code that
+suggests you asked for something unreasonable rather than that you forgot to
+mention a second content type you were not planning to use.
+
+### Why the rule exists
+
+Because the server chooses the response format, per request:
+
+> If the body is a JSON-RPC *request*, the server **MUST** return either
+> `Content-Type: application/json` (a single JSON object) or
+> `Content-Type: text/event-stream` (an SSE response stream). The client
+> **MUST** support both.
+
+A fast tool answers with plain JSON. A slow one opens a stream so it can send
+progress notifications before the result. **You do not get to pick**, so you
+have to declare you can handle either.
 
 <Callout type="gotcha" title="It is the fastest twenty minutes you will ever lose">
   And it bites at every level of the stack: in `curl` while poking a server, in
   the hand-written client, and again in project #5 when the modern-era envelope
-  gets added on top.
+  gets layered on top.
 
-  If a brand-new MCP integration returns 406, this is it. Every time.
+  If a brand-new MCP integration returns `406`, this is it. Every time.
 </Callout>
 
-## Bite #2 — the reply might be SSE
+## Part 3 · Bite #2 — the reply might be SSE
 
-The response to a perfectly ordinary `tools/call` may come back as **plain
-JSON** or as **Server-Sent Events**, and which one you get depends on the
-server, not on you.
+Same request, two legal shapes:
 
 ```text
 # sometimes this
@@ -59,14 +104,56 @@ event: message
 data: {"jsonrpc":"2.0","id":1,"result":{...}}
 ```
 
-Both are legal. A client that assumes one gets a confusing parse error against
-a server that chose the other — and the error will be about unexpected token
-`e` in JSON, which tells you nothing about content negotiation.
+A client that assumes the first gets `SyntaxError: Unexpected token 'e' in JSON
+at position 0` — which tells you nothing whatsoever about content negotiation,
+and sends you looking at your JSON serialisation.
 
-So the client checks the response's content type and has a small SSE reader for
-the second case. That is most of the two hundred lines.
+So you need a small SSE reader:
 
-## The translation layer everybody warns you about
+```ts
+async function readSse(res: Response) {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let last: unknown;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // events are separated by a blank line
+    const events = buffer.split(/\r?\n\r?\n/);
+    buffer = events.pop() ?? "";
+
+    for (const event of events) {
+      for (const line of event.split(/\r?\n/)) {
+        if (line.startsWith(":")) continue;              // comment / keep-alive
+        if (!line.startsWith("data:")) continue;         // event:, id:, retry:
+        last = JSON.parse(line.slice(5).trim());
+      }
+    }
+  }
+  return last;
+}
+```
+
+Four details in there that each cost something to learn:
+
+| Detail | Why |
+|---|---|
+| `{ stream: true }` on `decode` | a multi-byte UTF-8 character can be split across two chunks |
+| split on a **blank line** | that is the SSE event separator, not the newline |
+| `buffer = events.pop()` | the last piece may be a partial event; keep it for the next chunk |
+| skip lines starting with `:` | those are comments — servers send them as keep-alives on long streams |
+
+<Callout type="insight" title="The final response terminates the stream">
+  On an SSE reply you may receive several `notifications/progress` events
+  before the answer. The last `data:` line is the JSON-RPC response — which is
+  why the reader above keeps overwriting `last` and returns it at the end.
+</Callout>
+
+## Part 4 · The translation layer everybody warns you about
 
 MCP and the Claude API both describe tools with JSON Schema. They are *almost*
 the same, which is worse than being different, because the gap is invisible
@@ -92,15 +179,28 @@ until it isn't.
     style CLAUDE fill:#2e1065,stroke:#a78bfa,color:#ede9fe`}
 </Diagram>
 
-Two more things that file quietly handles, both of which are one-line fixes you
-would otherwise find the hard way:
+Two more things that file quietly handles, both one-liners you would otherwise
+find the hard way:
 
-- **It strips `$schema`.** Noise you pay tokens for on every single request, on
-  every tool, forever.
-- **It substitutes `{type:"object", properties:{}}` for a missing schema.** A
-  no-argument tool is perfectly legal in MCP and a `400` in the Claude API.
+**It strips `$schema`.** Noise you pay tokens for on every request, on every
+tool, forever. Given [what a growing conversation
+costs](/learn/host/the-meter), removing bytes from the cached prefix is worth
+doing once.
 
-## Check the transport before you check anything else
+**It substitutes `{type:"object", properties:{}}` for a missing schema.** A
+no-argument tool is perfectly legal in MCP and a `400` in the Claude API.
+
+<Callout type="gotcha" title="And the translation must be stable">
+  Whatever this layer produces sits near the front of every request and is
+  therefore inside the **cached prefix**. If it re-orders keys, re-serialises
+  differently, or sorts tools inconsistently between calls, you silently lose
+  prompt caching — [no error, just a bigger
+  bill](/learn/host/the-meter).
+
+  Build it once, outside the loop.
+</Callout>
+
+## Part 5 · Check the transport before you check anything else
 
 The best habit in project #2, and it costs nothing:
 
@@ -114,9 +214,36 @@ npm run agent           # 3. does the loop chain its own output?
   Run them in that order and **you can never be more than one layer away from
   the bug.**
 
-  The first two cost nothing — no model, no tokens. Which means the cheap
-  checks run first and the expensive one only runs against a stack you have
-  already proved. Every project after this one keeps the same convention, and
-  project #5 pushes it as far as it goes: [an entire regression suite that
-  costs $0.00](/learn/ledger/zero-dollar-evals).
+  When `npm run agent` misbehaves, you already know the transport works and the
+  schemas convert — so the problem is in the loop or the model, and you have
+  eliminated two thirds of the surface area without thinking.
 </Callout>
+
+And note which ones cost money: the first two do not touch a model at all. That
+convention survives the whole series and reaches its logical end in project #5,
+with [a full regression suite that costs
+$0.00](/learn/ledger/zero-dollar-evals).
+
+<Checkpoint>
+  ```bash
+  npm run mcp:list
+  ```
+
+  Three servers, eleven tools, and no authentication errors — against the
+  **live** deployments, not local ones. If a server is unreachable this is
+  where you find out, before any of it is your loop's fault.
+</Checkpoint>
+
+## What you now know
+
+- An MCP client is `fetch` plus an SSE reader. Two hundred lines, and worth
+  writing once.
+- `Accept` must list **both** content types, because the server picks the
+  response format per request.
+- Handle **both** reply shapes; the SSE reader needs streaming decode, blank-line
+  splitting, partial-buffer carry-over, and comment skipping.
+- `inputSchema` → `input_schema`, strip `$schema`, substitute an empty object
+  for a missing one — and keep the output **stable**, because it lives in the
+  cached prefix.
+- Prove the transport, then the schemas, then the loop. In that order, and the
+  first two are free.

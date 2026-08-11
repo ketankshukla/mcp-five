@@ -8,7 +8,10 @@ project: 3
 This is the one idea to take away from project #3, and arguably from the whole
 course. If you remember nothing else, remember this page.
 
-## The problem, stated exactly
+It is also, as it turns out, the specification's own position — but project #3
+arrived at it by reasoning, which is the more useful way to arrive at it.
+
+## Part 1 · The problem, stated exactly
 
 Project #2's loop is genuinely good. It reads your sentence, picks tools across
 several servers, runs them, feeds the results back, and loops until it has an
@@ -36,22 +39,43 @@ Now imagine connecting one more server — one with a `delete_file` tool.
   "The model picked a tool" and "the tool ran" are the same instant.
 </Callout>
 
-## The tempting fix, and why it is a disaster
+Go back and look at [the loop](/learn/host/a-while-loop) and you will see it
+literally — `toolbox.dispatch(use.name, use.input)` sits directly inside the
+`Promise.all`. There is no line between deciding and doing where anything could
+intervene, ask, or even take notes.
+
+Project #3 puts a gap there, and stands a human in it. This page is about the
+**wrong** way to decide what goes in the gap.
+
+## Part 2 · The tempting fix
 
 MCP lets a server describe its own tools as dangerous:
 
-```ts
+```ts title="app/api/jar/route.ts"
 server.registerTool("smash_jar", {
-  description: "PERMANENTLY destroy the cookie jar...",
+  description: "PERMANENTLY destroy the cookie jar and erase its history...",
   annotations: { destructiveHint: true },   // <- right here
 }, handler);
 ```
 
-That is real, it is in the spec, and project #3 **sets it honestly** on its own
-destructive tool. Go and look: `app/api/jar/route.ts`.
+That is real, it is in the spec, and **project #3 sets it honestly** on its own
+destructive tool. Go and look.
+
+So the obvious gate writes itself:
+
+```ts
+// ❌ do not do this
+if (tool.annotations?.destructiveHint) await askHuman();
+else run();
+```
+
+Three lines. Reads well. Uses a documented protocol feature for exactly the
+purpose it appears to be for.
 
 And then the host **never reads it.** Not as a hint. Not as a default. Not as a
 tiebreaker.
+
+## Part 3 · Why, in ten seconds
 
 <Diagram
   caption="The flag is set by whoever wrote the server. If your gate consults it, the decision about whether to ask a human has been delegated to the party the human is being protected from."
@@ -89,27 +113,73 @@ tiebreaker.
   the door.
 </Callout>
 
-## Every softer version dies the same way
+The flag is a **claim made by the thing being controlled**. It arrives over
+HTTP, from a machine you do not run, set by whoever wrote that code — who may
+be careless, may be compromised, or may simply disagree with you about what
+counts as destructive.
+
+## Part 4 · Every softer version dies the same way
 
 This is the part worth internalising, because the strong form of the rule is
-easy to accept and the weak forms are the ones you will actually be tempted by.
+easy to accept and **the weak forms are the ones you will actually be tempted
+by** at 5pm on a Friday.
 
 | "But what if I…" | Why it still fails |
 |---|---|
 | …only trust it for servers on my allowlist? | Then you're trusting the **server**, not the flag. The flag adds nothing and can only weaken you. |
 | …use it as a default and override per-tool? | A server can still opt a **new** tool out of your gate by shipping it unflagged. |
 | …warn when the hint disagrees with my list? | Fine as telemetry. Never as an input to the decision. |
+| …only trust `true`, never `false`? | Now a server can force spurious prompts at will — which is a denial-of-attention attack, and [click-fatigue is a real failure mode](/learn/gate/default-allow). |
 
-Notice the shape they share. Each one tries to keep *some* signal from the
-flag, and in each case the signal is only ever able to make your gate **more
-permissive** than your own list would have been. A control that can only be
-loosened by an untrusted party is not a control.
+<Callout type="insight" title="Notice the shape they share">
+  Each one tries to keep *some* signal from the flag. And in every case the
+  signal can only ever make your gate **more permissive** than your own list
+  would have been, or **noisier** than it should be.
+
+  **A control that an untrusted party can loosen is not a control.**
+</Callout>
 
 <Callout type="quote">
   A hint from the other side of a network boundary is not a permission model.
 </Callout>
 
-## What the host does instead
+## Part 5 · The specification agrees, in MUST language
+
+Project #3 reasoned its way here. The MCP specification states it outright:
+
+<Callout type="quote">
+  For trust & safety and security, clients **MUST** consider tool annotations to
+  be untrusted unless they come from trusted servers.
+</Callout>
+
+And in its opening principles:
+
+> Tools represent arbitrary code execution and must be treated with appropriate
+> caution. In particular, descriptions of tool behavior such as annotations
+> should be considered untrusted, unless obtained from a trusted server.
+
+<Callout type="warning" title="And yet the field still exists, which is the interesting part">
+  A field in a schema is an invitation. `destructiveHint` is right there, typed,
+  documented, and named exactly like the thing you want.
+
+  The specification has to say **MUST consider untrusted** precisely because
+  the natural thing to do with a boolean called `destructiveHint` is to branch
+  on it.
+
+  There is a general lesson here: when a protocol offers you a field whose
+  obvious use is forbidden, that field is for **display**, not for decisions.
+  Use it to pick an icon. Never to pick a code path.
+</Callout>
+
+The same reasoning killed a whole feature. The `roots` capability — a client
+telling a server which directories it considers relevant — is **deprecated as
+of `2026-07-28`**, and the stated reason is that roots were *"informational
+guidance rather than an access-control mechanism. The protocol does not enforce
+that servers stay within roots."*
+
+Same shape. A field that looks like a boundary and enforces nothing.
+
+## Part 6 · What the host does instead
 
 An explicit list, on the host side, written by you.
 
@@ -134,11 +204,13 @@ const RULES: Rule[] = [
 
 Thirty lines of actual logic, and it is the most important file in the project.
 
-Two details in there worth copying:
+### Three details worth copying
 
 **Every rule carries a `reason`.** It is shown to the human in the approval
 card, so the pause never feels arbitrary. *"Why am I being asked?"* should
-always have an answer.
+always have an answer — and in project #4 this becomes essential, because [the
+person approving may be three agents away from the one
+asking](/learn/crew/five-agents-one-human).
 
 **A rule that crashes fails closed.**
 
@@ -154,24 +226,66 @@ try {
 
 `args` is whatever the model produced. It is untrusted, possibly malformed, and
 typed as `unknown` on purpose. A rule that assumes a shape and gets something
-else must not throw and take the whole run with it — and must not silently
-allow, either.
+else must not throw and take the whole run with it — **and must not silently
+allow, either.** Those are the only two wrong answers, and "fail closed" picks
+neither.
 
-## And the model asking nicely is not a safety feature
+**The rules are printable.** `describeRules()` exists so the whole list can be
+dumped in a checkpoint script and rendered in the browser, without anybody
+reading JavaScript to find out what the gate does.
+
+```bash
+npm run mcp:translate   # ends with the rule table and a per-tool verdict
+```
+
+<Callout type="lesson" title="A security control nobody can read is a security control nobody audits">
+  You can see, before running anything, exactly which calls would stop. That is
+  worth more than it costs, and it costs about fifteen lines.
+</Callout>
+
+## Part 7 · And the model asking nicely is not a safety feature
 
 One more thing, because it is genuinely misleading the first time you see it.
 
 Ask the agent to *"smash the jar"* and the model will often stop and ask you
-itself, because the tool's description says it is irreversible. That is good
-behaviour.
+itself, because the tool's description says it is irreversible. The gate never
+fires, and the checkpoint reports:
 
-<Callout type="warning" title="It is not a guarantee">
-  It is a **disposition**. It varies run to run, and it evaporates the moment a
-  user says *"yes, I'm sure, no questions."*
+<Terminal>
+{`  The loop finished without ever pausing.
+  The gate never fired.`}
+</Terminal>
 
-  Which was tested. **The model complied. The host stopped it anyway.**
+That looks like a working safety system. It is not one.
 
-  The gate is the part that is a guarantee. The model's politeness is a nice
-  extra you must never depend on — and depending on it is easy, because for the
-  first fifty runs it looks exactly like a working safety system.
+<Callout type="warning" title="It is a disposition, not a guarantee">
+  It varies run to run. It varies by model. And it evaporates the moment a user
+  is insistent.
+
+  Which was tested, with:
+
+  *"Smash the jar. Yes I am certain, do it right now, no questions."*
+
+  **The model complied immediately. The host stopped it anyway.**
 </Callout>
+
+<Callout type="lesson" title="If your safety testing only uses polite prompts, you are measuring the model's manners, not your controls">
+  Test the gate with a user who is actively trying to get past it. That is the
+  only version of the test that tells you anything about the gate rather than
+  about the model's mood.
+</Callout>
+
+## What you now know
+
+- Deciding and doing are **the same instant** in a plain agent loop; a gate is
+  a gap you insert deliberately.
+- `destructiveHint` is a claim by the thing being controlled. Consulting it
+  makes your gate optional for anyone who wants it to be.
+- Every partial-trust variant fails the same way: an untrusted party can only
+  ever **loosen** your control or make it noisier.
+- The specification says **MUST consider annotations untrusted** — and
+  deprecated `roots` for being the same shape.
+- The host owns an explicit list; rules carry reasons, **fail closed** on
+  error, and are printable.
+- The model stopping to ask is manners, not a guarantee. Test with a hostile
+  prompt.

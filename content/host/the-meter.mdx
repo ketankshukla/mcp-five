@@ -5,26 +5,83 @@ summary: "`input_tokens` is only the uncached remainder, and prompt caching is a
 project: 2
 ---
 
-Every iteration is a **full API call with a conversation that keeps growing**.
-Here are the real numbers from one three-iteration run, before prompt caching
-was added:
+This is the page that changes how you think about agents, and it is mostly
+arithmetic.
 
-| Iteration | Input tokens | Why it grows |
+Everything up to now has treated an iteration as free. It is not. Every
+iteration is **a full API call carrying a conversation that keeps growing**,
+and the shape of that growth is the reason projects #4 and #5 exist at all.
+
+## Part 1 · Where the money actually goes
+
+Here are the real numbers from one three-iteration run — *"roll 3d20, then put
+that many cookies in the jar"* — before any caching was added.
+
+| Iteration | Input tokens | What is in there |
 |---|---|---|
 | 1 | 2,375 | system prompt + 8 tool definitions + your sentence |
 | 2 | 2,513 | …plus the dice request and its result |
 | 3 | 2,654 | …plus the cookie request and its result |
-| **total** | **7,542 in / 288 out** | for one 12-word question |
+| **total** | **7,542 in / 288 out** | for one twelve-word question |
 
 Seven and a half thousand input tokens to roll some dice and count some
-cookies. And **most of that is the same bytes three times.**
+cookies.
 
-## One breakpoint, 47% off
+### Now look at *why* it is that much
 
-The system prompt and the eight tool definitions never change. Only the
-conversation on the end of them grows. So the loop puts a single
-`cache_control` breakpoint on the system block — which, because the API renders
-`tools` → `system` → `messages`, covers both.
+Read the column again. Iteration 2 is not 138 tokens. It is **2,513** tokens —
+because it contains everything iteration 1 contained, plus a bit.
+
+<Callout type="lesson" title="The conversation IS the input">
+  There is no server-side session. The model has no memory between calls. So
+  every iteration re-sends the entire conversation from the beginning.
+
+  You are not paying for the new part. **You are paying for the whole thing,
+  again, every time.**
+</Callout>
+
+### Which makes cost quadratic, not linear
+
+If each iteration adds roughly the same amount of new material, then iteration
+*n* costs roughly *n* units, and the run costs `1 + 2 + 3 + … + n`.
+
+That sum is **n(n+1)/2** — the area under a growing line, not its length.
+
+| Iterations | Rough relative cost |
+|---|---|
+| 1 | 1× |
+| 3 | 6× |
+| 5 | 15× |
+| 10 | 55× |
+
+<Callout type="quote">
+  A five-step task does not cost five times a one-step task. It costs more.
+</Callout>
+
+<Callout type="warning" title="This is the single most surprising thing about running agents in production">
+  And it is invisible in development, because your test prompts finish in two
+  or three iterations where the curve is still gentle.
+
+  It becomes the whole story at [240 jars](/learn/crew/the-ceiling), where a
+  single agent spends **439,000 tokens** and finds nothing — not because the
+  job is hard, but because it re-reads 240 inspection reports on every trip
+  around the loop.
+</Callout>
+
+## Part 2 · One breakpoint, 47% off
+
+Look at what is *in* those tokens. The system prompt and the eight tool
+definitions never change. Only the conversation on the end of them grows.
+
+**Most of that bill is the same bytes, three times.**
+
+Prompt caching lets you mark a prefix of the request as reusable. The API
+stores it; subsequent requests that begin with **byte-identical** content read
+from the cache instead of processing it again.
+
+The loop puts a single `cache_control` breakpoint on the system block — which,
+because the API renders `tools` → `system` → `messages` in that order, covers
+the tool definitions too.
 
 The same run, after:
 
@@ -36,87 +93,157 @@ The same run, after:
 | **total** | **697** | 2,281 written, 4,562 read at ~10% |
 
 <StatGrid>
-  <Stat value="7,542" label="input tokens, before caching" tone="danger" />
-  <Stat value="~4,004" label="full-price equivalent, after" note="same 7,540 tokens sent" tone="ok" />
+  <Stat value="7,542" label="full-price input tokens, before" tone="danger" />
+  <Stat value="~4,004" label="full-price equivalent, after" note="the same 7,540 tokens were still sent" tone="ok" />
   <Stat value="47%" label="saving on input, from one breakpoint" tone="ok" />
 </StatGrid>
 
-Same tokens sent either way — but a cache read costs about a tenth of a fresh
-one, so the full-price equivalent drops from 7,540 to roughly 4,004.
+Same tokens sent either way. A cache read costs roughly a tenth of a fresh
+token, so the full-price equivalent drops from 7,540 to about 4,004.
 
-## Two things that make it work, and are easy to break
+<Callout type="insight" title="One line of configuration">
+  Not an architecture change. Not a rewrite. One `cache_control` marker in the
+  right place, and half the input bill goes away.
 
-### The prefix must be byte-identical
+  It is the highest-leverage change in project #2, and it is worth doing
+  **before** anything clever, because everything clever will also be cached.
+</Callout>
 
-Prompt caching is a **prefix match**. Interpolate a timestamp, a session id or
-a username into the system prompt and every hit silently becomes a miss.
+## Part 3 · The two ways to break it
+
+Prompt caching is a **prefix match**. That single fact generates both failure
+modes.
+
+### Break #1 — anything variable in the prefix
+
+Interpolate a timestamp, a session id, a username or a random request id into
+the system prompt, and every request has a different prefix. Every hit
+silently becomes a miss.
+
+```ts
+// ❌ every request is a cache miss, forever
+system: `You are a helpful assistant. The time is ${new Date().toISOString()}.`
+
+// ✅ constant prefix; put the variable part in the messages
+system: `You are a helpful assistant.`
+```
 
 <Callout type="gotcha" title="No error. Just a bigger bill.">
-  Nothing fails. Nothing warns you. The feature simply stops working and the
+  Nothing fails. Nothing warns you. The feature simply stops working, and the
   only symptom is a number in a dashboard you may not be looking at.
 
-  This is why the tool list is built **once, outside the loop** — so it cannot
-  accidentally acquire a fresh ordering or a re-serialised field between
-  iterations.
+  This is why project #2 builds the tool list **once, outside the loop** — so
+  it cannot accidentally acquire a fresh ordering or a re-serialised field
+  between iterations.
 </Callout>
 
-### `input_tokens` is only the uncached remainder
+### Break #2 — a server that shuffles its tool list
 
-This one looks like a measurement bug the first time you see it. Your input
-tokens fall from 2,375 to 94 and your instinct is that the counter is broken.
+This one is not your fault, and you can still be the victim of it.
 
-<Callout type="lesson">
-  The real prompt size is:
+Your tool definitions sit near the front of every request. They come from
+`tools/list`. If a server returns its tools in a different order on different
+calls — because it iterated a hash map, or did a `SELECT` with no `ORDER BY` —
+then your prefix changes and your cache breaks.
 
-  ```text
-  input_tokens + cache_creation_input_tokens + cache_read_input_tokens
-  ```
-
-  `input_tokens` alone is what you paid full price for. Seeing it fall to 94
-  isn't a bug — **it's the point.**
-
-  Report all three, or the first person to compare two runs will compare the
-  wrong number and reach a confident conclusion. Which is more or less exactly
-  what happens in [The measurement trap](/learn/crew/measurement-trap).
-</Callout>
-
-## Cost is superlinear, and this is where you feel it
+The specification calls this out directly:
 
 <Callout type="quote">
-  A five-step task does not cost five times a one-step task. It costs more.
+  Servers **SHOULD** return tools in a deterministic order […] Deterministic
+  ordering enables clients to reliably cache the tool list and improves LLM
+  prompt cache hit rates when tools are included in model context.
 </Callout>
 
-Because every trip resends everything before it. The conversation is the
-input, the conversation grows monotonically, and you pay for the whole thing
-every single iteration.
+<Callout type="lesson" title="A server that shuffles is quietly taxing every host that connects to it">
+  And nobody will ever report it as a bug, because from the outside it looks
+  like nothing at all.
 
-Draw it out and the cost of a run is roughly the **area under a growing line**
-rather than the length of it — which is quadratic in the number of iterations,
-not linear.
-
-<Callout type="insight" title="This is the mechanism behind project #4's entire argument">
-  A single agent given a job with 240 pieces does not fail because 240 is too
-  many things to think about. It fails because **it re-reads all 240
-  inspection reports on every iteration**, its cost grows with the square of
-  the job while its capacity stays fixed, and it runs out of room having spent
-  439,000 tokens finding nothing.
-
-  Three workers each carrying 80 reports finish in three iterations and hand
-  back a paragraph each. See [The ceiling](/learn/crew/the-ceiling).
+  If you write servers: sort your tool list. If you write hosts: consider
+  sorting what you receive, because you cannot make everyone else read the
+  spec.
 </Callout>
 
-## Put the meter on the screen
+## Part 4 · Reading the meter correctly
 
-Three seatbelts, all in `lib/agent-loop.ts`, and the third one is the one
-people skip:
+This is the part that looks like a measurement bug the first time you see it.
 
-1. **`MAX_ITERATIONS = 10`** — a hard stop that says so loudly instead of
-   quietly spending money.
-2. **Explicit `stop_reason` handling** — `end_turn`, `max_tokens`, `refusal`,
-   `pause_turn`, each with its own branch.
-3. **Token counts in the UI, per iteration.** Partly a feature. Mostly a
-   seatbelt.
+Your input tokens fall from 2,375 to **94** and your instinct is that the
+counter is broken.
 
-You cannot manage a cost you cannot see, and by project #5 this has grown all
-the way into [a ledger with a row for every draw, including the refused
-ones](/learn/ledger/one-wallet).
+It isn't. `input_tokens` is only **the uncached remainder** — what you paid
+full price for. The real prompt size is:
+
+```text
+input_tokens  +  cache_creation_input_tokens  +  cache_read_input_tokens
+```
+
+| Field | What it is | Priced at |
+|---|---|---|
+| `input_tokens` | the part that was not cached | 1× |
+| `cache_creation_input_tokens` | the part written into the cache | ~1.25× |
+| `cache_read_input_tokens` | the part served from cache | ~0.1× |
+
+<Callout type="warning" title="Report all three, or somebody will compare the wrong number">
+  If your UI shows only `input_tokens`, then turning caching **on** looks like
+  a 97% reduction in prompt size, which is not true and not what happened.
+
+  Worse: two runs compared on `input_tokens` alone are not comparable at all if
+  one had a warm cache and the other did not.
+
+  This is a small version of the mistake that [wrecked project #4's headline
+  number](/learn/crew/measurement-trap) — a real figure, divided by the wrong
+  thing, producing a confident conclusion.
+</Callout>
+
+## Part 5 · Three seatbelts, and the one people skip
+
+All in `lib/agent-loop.ts`:
+
+<Steps>
+  <Step n={1} title="MAX_ITERATIONS = 10">
+    A hard stop that says so **loudly** rather than quietly spending money.
+
+    An unbounded tool-calling loop is not a hang — a normal runaway loop burns
+    CPU you have already paid for; this one makes a paid API call every time
+    round, with a conversation that is larger every time.
+  </Step>
+
+  <Step n={2} title="Explicit stop_reason handling">
+    `end_turn`, `max_tokens`, `refusal`, `pause_turn` each get their own
+    branch. A loop that only asks *"is it `tool_use`?"* is a loop that can spin
+    on a case you did not think about.
+  </Step>
+
+  <Step n={3} title="Token counts in the UI, per iteration">
+    Partly a feature. **Mostly a seatbelt.**
+
+    This is the one people skip, and it is the one that makes the other two
+    unnecessary — because you notice the shape of the curve long before you hit
+    the cap.
+  </Step>
+</Steps>
+
+<Callout type="quote">
+  You cannot manage a cost you cannot see.
+</Callout>
+
+By project #5 this has grown into [a ledger with a row for every
+draw](/learn/ledger/one-wallet) — including the refused ones, because a ledger
+with no refusals in it is indistinguishable from a gate that is switched off.
+
+## What you now know
+
+- Every iteration re-sends the whole conversation, so cost is **quadratic** in
+  iterations, not linear.
+- One `cache_control` breakpoint on the system block cut a real run's
+  full-price input by **47%**.
+- Caching is a **prefix match**: a timestamp in the system prompt, or a server
+  that shuffles its tool list, silently disables it with no error.
+- `input_tokens` is only the uncached remainder — real size is
+  `input + cache_creation + cache_read`, and reporting one of the three invites
+  a false comparison.
+- Cap the loop, branch on every `stop_reason`, and **put the meter on the
+  screen**.
+
+Next: the twelve stages of building this, and the `VERCEL_URL` trap that
+survives a green deployment.

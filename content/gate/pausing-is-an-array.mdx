@@ -5,27 +5,45 @@ summary: "The agent's entire state is its messages array — so freezing it mid-
 project: 3
 ---
 
-Here is the problem that shapes the entire design.
+You have decided some tool calls need a human. Now you have to actually stop,
+and that turns out to be the part that shapes the whole design.
 
-A human might take five seconds to decide, or five minutes, or might wander off
-and come back tomorrow. **A serverless function gets 60 seconds and then it
-dies.**
+## Part 1 · The obvious implementation, and why it fails in production only
 
-So the obvious implementation — hold the HTTP connection open and `await` the
-click — works perfectly in development, works for fast clicks in staging, and
-times out in production for *exactly the decisions people thought hardest
-about*.
+A human might take five seconds to decide. Or five minutes. Or they wander off
+and come back tomorrow.
 
-<Callout type="gotcha" title="The failure mode is precisely inverted">
-  Easy decisions succeed. Hard ones time out. The gate works flawlessly right
-  up until the moment somebody needs to think, which is the only moment it was
-  built for.
+A serverless function gets about **60 seconds** and then it dies.
+
+So the obvious implementation:
+
+```ts
+// ❌ works in dev, works in staging, dies in production
+const decision = await waitForHumanClick(runId);
+if (decision === "approve") await runTool();
+```
+
+…holds the HTTP connection open and awaits the click. It works perfectly on
+your laptop. It works for fast clicks in staging.
+
+<Callout type="gotcha" title="And the failure mode is precisely inverted">
+  Easy decisions succeed. **Hard ones time out.**
+
+  The gate works flawlessly right up until the moment somebody needs to think
+  — which is the only moment it was built for.
+
+  You cannot find this in testing, because when you test it you already know
+  which button you are going to press.
 </Callout>
 
-## So don't hold anything open. End the request.
+There is a second problem with holding the connection, and it is worse: the
+machine holding it can be recycled at any point. Even within the timeout, the
+thing you are relying on staying alive is not something you control.
+
+## Part 2 · So don't hold anything open. End the request.
 
 <Diagram
-  title="D5 · pause and resume across two HTTP requests"
+  title="Pause and resume across two HTTP requests"
   caption="Read the grey band in the middle. Nothing is running. There is no process, no held connection, no timer — the agent is a row in Postgres, and it will sit there indefinitely at no cost. A completely different request, possibly on a different machine, picks it up."
 >
 {`sequenceDiagram
@@ -79,9 +97,10 @@ about*.
     end`}
 </Diagram>
 
-## Why this is so little code
+## Part 3 · Why this is so little code
 
-Because of something project #2 established for a completely different reason:
+Because of something [project #2](/learn/host/a-while-loop) established for a
+completely different reason:
 
 <Callout type="quote">
   The agent loop's entire state is the `messages` array. There is no hidden
@@ -101,65 +120,157 @@ const messages = [...run.messages, toolResultMessage(results)];
 runAgentLoop({ messages, toolbox, iterationOffset: run.iterations });
 ```
 
-There is no continuation, no serialised generator, no coroutine library.
+There is no continuation, no serialised generator, no coroutine library, no
+workflow engine.
 
 <Callout type="lesson" title="The pause is a `return`. The resume is a function call with a bigger array.">
   And the resumed loop **never learns it was paused**. A conversation whose
   last message is a `user` turn full of `tool_result` blocks is just… a
-  conversation.
+  conversation. It is indistinguishable from one that never stopped.
 
-  This is the payoff for a decision that looked like ordinary hygiene: keeping
-  the loop free of storage concerns. `runAgentLoop` takes `messages` in and
-  yields events out. It has no idea whether those messages came from memory,
-  Postgres, or a text file.
+  This is the payoff for a decision that looked like ordinary hygiene:
+  **keeping the loop free of storage concerns.** `runAgentLoop` takes
+  `messages` in and yields events out. It has no idea whether those messages
+  came from memory, from Postgres, or from a text file.
 </Callout>
 
-## The seatbelt that unbuckles itself
+### The schema is not exotic either
 
-One detail that is very easy to miss and costs real money.
+| Column | Holds |
+|---|---|
+| `id` | uuid, the run |
+| `status` | `running` / `awaiting_approval` / `done` / `error` |
+| `messages` | **jsonb — the agent's entire mind** |
+| `iterations` | how many trips it has already taken |
+| `pending_calls` | jsonb, what it wants to do |
+
+One row. The interesting column is `messages`, and it is doing double duty: it
+is the pause mechanism *and*, for free, a complete record of the conversation
+as the model saw it — which is most of what [replay](/learn/gate/replay) needs.
+
+## Part 4 · The seatbelt that unbuckles itself
+
+One detail, very easy to miss, that costs real money.
 
 ```ts
 runAgentLoop({ messages, toolbox, iterationOffset: run.iterations });
 ```
 
-Without `iterationOffset`, the 10-iteration cap **resets to zero on every
-resume**. A run that pauses nine times gets nine fresh budgets.
+Without `iterationOffset`, `iteration` starts at 0 again on every resume. A run
+that pauses nine times gets **nine fresh budgets of ten iterations** — so the
+cap you thought was 10 is actually 90.
 
 <Callout type="quote">
   A seatbelt that unbuckles itself every time you stop the car is not a
   seatbelt.
 </Callout>
 
-The general shape of this bug is worth naming, because project #4 hit the exact
-same one with its spawn cap: **when you split an operation across requests,
-every counter has to be re-scoped.** Anything that was "per run" and is now
-stored and reloaded needs to be carried across the boundary explicitly, or it
-silently becomes "per request."
+**And nothing fails.** There is no error, no warning, no failed test. The
+symptom is a bill.
 
-## Nothing in the batch runs
+<Callout type="lesson" title="Re-scope every counter when you split an operation across requests">
+  Pausing did not just add a feature. **It changed what "one run" means** — and
+  anything that was implicitly scoped to a run has to be re-scoped by hand.
+
+  | What broke | Where it hid |
+  |---|---|
+  | `MAX_ITERATIONS` reset to 0 | top of the loop |
+  | the trace `seq` counter | would have restarted both requests at 1 |
+  | project #4's `MAX_SPAWNS` | **a closure**, which is much harder to spot |
+
+  Project #4 hit the identical bug one project later, in a place nobody thought
+  to look. This is worth turning into a checklist item: after making something
+  resumable, grep for every counter and ask what it is scoped to now.
+</Callout>
+
+## Part 5 · Two smaller things the pause needs
+
+### Nothing in the batch runs
 
 If the model asks for three tools and one of them is gated, **all three wait.**
 
 Running the two safe ones first would be faster. It would also mean that
 clicking *Deny* leaves you in a world where half the batch already happened —
-so the thing you refused didn't occur, but its two siblings did, and now the
+so the thing you refused did not occur, but its two siblings did, and the
 agent's next step is reasoning about a partially-applied state nobody chose.
 
-All-or-nothing is worth the lost milliseconds.
+<Callout type="insight" title="All-or-nothing is worth the lost milliseconds">
+  The alternative is a system where the meaning of "I denied that" depends on
+  the order the tools happened to be listed in.
+</Callout>
 
-## And double-clicking Approve must not run it twice
+### Double-clicking Approve must not run the tool twice
 
 For `smash_jar` that is harmless. For `charge_card` it is not.
 
-The resume route checks the run's status and returns **`409`** on the second
-attempt. The state machine is the idempotency key: a run that is no longer
-`awaiting_approval` cannot be approved again.
+The resume route checks the run's status and returns **`409 Conflict`** on the
+second attempt. The state machine *is* the idempotency key:
 
-<Callout type="insight" title="Why Postgres for this, and not a queue">
-  Because the thing you need is not delivery, it is **a durable place for one
-  object that has a status.** A run is a row; approving it is a conditional
-  update; the whole concurrency story is `where status = 'awaiting_approval'`.
+```sql
+update runs set status = 'running'
+ where id = $1 and status = 'awaiting_approval'
+ returning *
+```
 
-  Reaching for infrastructure heavier than that would have bought a lot of
-  machinery to solve a problem the database already solved.
+If that returns no row, somebody already resumed it. Same trick as [project
+#1's cookie-eating statement](/learn/server/the-sandcastle) — the guard and the
+write are one indivisible operation, so two clicks cannot both pass the check.
+
+## Part 6 · Why Postgres, and why the serverless driver
+
+**Why a database at all?** Because you need a durable place for one object that
+has a status. A run is a row; approving it is a conditional update; the whole
+concurrency story is `where status = 'awaiting_approval'`. Reaching for a queue
+or a workflow engine buys a lot of machinery to solve a problem the database
+already solved.
+
+**Why `@neondatabase/serverless` rather than `pg`?** Because a connection
+**pool** is a great design for a server that boots once and runs for months,
+and a serverless function is the opposite. "Open a pool at boot" becomes "open
+a pool per request", and a traffic spike walks straight into:
+
+<Terminal>
+{`FATAL: sorry, too many clients already`}
+</Terminal>
+
+The serverless driver holds no connection at all — every query is an ordinary
+HTTPS request. No pool, no sockets to leak, works unchanged in a route handler
+or a script.
+
+<Callout type="warning" title="The tradeoff is real: no interactive transactions">
+  You cannot `BEGIN`, read a row, think about it, then `UPDATE` in the same
+  transaction. Two ways around it, both used here:
+
+  ```ts
+  // 1. several statements as one atomic batch
+  await sql.transaction([
+    sql`delete from jar_events`,
+    sql`update jar_state set cookies = 0 where id = 'default'`,
+  ]);
+
+  // 2. read and write in ONE statement — atomic because indivisible
+  await sql`update jar_state set cookies = cookies - ${n}
+             where id = 'default' and cookies >= ${n}
+             returning cookies`;
+  ```
+
+  That second one is worth staring at. The `and cookies >= ${n}` guard means
+  the "not enough cookies" check and the write are the **same statement**, so
+  two people eating at the same instant cannot both pass the check.
 </Callout>
+
+## What you now know
+
+- Holding the HTTP connection open works in dev and fails in production for
+  **exactly the decisions people think hardest about**.
+- The agent's whole state is its `messages` array, so pausing is an `INSERT`
+  and resuming is a function call with a bigger array.
+- The resumed loop cannot tell it was paused — which is why this needed no
+  continuation library.
+- **Re-scope every counter** when you split an operation across requests.
+  `iterationOffset` is not optional.
+- Gate the **whole batch**, and make resume idempotent with a conditional
+  update returning `409`.
+- Serverless needs a driver that holds no connections — and that costs you
+  interactive transactions, which you replace with single indivisible
+  statements.
