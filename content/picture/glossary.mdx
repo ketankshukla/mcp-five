@@ -4,12 +4,74 @@ emoji: "📖"
 summary: "Every term this course uses, defined in one line each."
 ---
 
-## Coming in a later milestone
+Where a term has a page of its own, the definition links to it.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/picture/glossary.mdx`.
+## The protocol
 
-### What will be here
+<Glossary>
+  <Term word="MCP">The Model Context Protocol. An agreed shape of JSON-RPC message between an AI application and the services it wants to reach — so ten apps and ten services need twenty integrations rather than a hundred.</Term>
+  <Term word="host">The thing that owns the conversation with the model, wrangles several servers, and runs the loop. Claude Code, Cursor and ChatGPT-with-plugins are all hosts. <a href="/learn/host/a-while-loop">→</a></Term>
+  <Term word="client">The piece that speaks to exactly one server. In this series it is hand-written — about 200 lines of <code>fetch</code>. <a href="/learn/host/client-by-hand">→</a></Term>
+  <Term word="server">Offers tools and waits. Never initiates. <a href="/learn/server/vending-machine">→</a></Term>
+  <Term word="protocol era">Which revision of MCP a connection is speaking. The legacy era negotiates once at <code>initialize</code>; the modern era (<code>2026-07-28</code>) is selected per request via a <code>_meta</code> envelope and has no server→client channel. <a href="/learn/ledger/protocol-by-hand">→</a></Term>
+</Glossary>
 
-Every term this course uses, defined in one line each.
+## The five capabilities
+
+<Glossary>
+  <Term word="tool">A verb. Something to do, which the <strong>model</strong> decides to invoke. <a href="/learn/server/anatomy-of-a-tool">→</a></Term>
+  <Term word="resource">A noun. Something to read, addressed by URI, which the <strong>host</strong> decides to show the model.</Term>
+  <Term word="prompt">A saved fill-in-the-blank instruction that a <strong>human</strong> picks from a menu. An offer, never spliced straight into the model's conversation.</Term>
+  <Term word="sampling">The server asking <strong>your host</strong> to run a model call. It has no API key and no model — it has yours. <a href="/learn/ledger/arrow-points-back">→</a></Term>
+  <Term word="elicitation">The server asking <strong>your user</strong> a question mid-call. Costs no money; spends attention.</Term>
+</Glossary>
+
+## The loop
+
+<Glossary>
+  <Term word="agent loop">Send the conversation and the tool list to the model; append its whole reply; if it asked for a tool, run it, paste the result back, and go again. That is all an agent is. <a href="/learn/host/a-while-loop">→</a></Term>
+  <Term word="iteration">One trip around that loop — one full API call with a conversation that is bigger than last time. Capped at 10 throughout this series.</Term>
+  <Term word="tool_use / tool_result">The request block the model emits, and the block you send back. Every <code>tool_use</code> needs <strong>exactly one</strong> matching <code>tool_result</code> or the API rejects the whole request — including when the answer is &ldquo;denied&rdquo;. <a href="/learn/gate/the-deny-branch">→</a></Term>
+  <Term word="namespacing">Rewriting every tool name as <code>server__tool</code> on the way out, so two servers can both offer <code>secret_code</code>. Split it back apart with <code>indexOf</code>, not <code>split</code>. <a href="/learn/host/the-toolbox">→</a></Term>
+  <Term word="local tool">A tool the host implements itself rather than fetching from a server. Runs with <strong>your host's privileges</strong>, which makes it a security boundary. <a href="/learn/crew/local-tools">→</a></Term>
+</Glossary>
+
+## Safety and oversight
+
+<Glossary>
+  <Term word="approval gate">A host-side list of what needs a human before it runs. Reads <strong>arguments</strong>, not just tool names, and never reads the server's own <code>destructiveHint</code>. <a href="/learn/gate/hint-not-permission">→</a></Term>
+  <Term word="destructiveHint">An annotation a server can set on its own tool. Genuinely useful for a human skimming a list or a UI picking an icon. <strong>Not a permission model</strong>, because a server that wants to bypass your gate would simply set it to false.</Term>
+  <Term word="default-allow">Unmatched tools run without asking. Deliberately chosen here, because a gate that prompts about <code>roll_dice</code> trains you to click Approve within ninety seconds. <a href="/learn/gate/default-allow">→</a></Term>
+  <Term word="eval">A prompt plus a check. Never assert on prose; run each case several times and score a pass rate; include a case where the right answer is calling nothing. <a href="/learn/gate/evals">→</a></Term>
+  <Term word="replay">Reading a stored run back from its <code>trace_events</code> rows. No model call, nothing re-executed, nothing charged. <a href="/learn/gate/replay">→</a></Term>
+</Glossary>
+
+## Delegation
+
+<Glossary>
+  <Term word="sub-agent">A tool that happens to think. The model gets one extra tool whose implementation is the loop that is calling it. <a href="/learn/crew/sub-agent">→</a></Term>
+  <Term word="orchestrator">The agent that holds the plan and hires the workers. It receives each worker's forty-second investigation as one paragraph in an ordinary <code>tool_result</code>, and has no idea an agent produced it.</Term>
+  <Term word="origin">Who asked, and why — carried up with a bubbled approval so the human is not rubber-stamping a decision they cannot see. <a href="/learn/crew/five-agents-one-human">→</a></Term>
+  <Term word="partial_results">Finished siblings' reports, stored so that approving does not re-run the workers that already completed.</Term>
+  <Term word="paused_children">A frozen worker's entire <code>messages</code> array, without which there is nothing left to say yes to.</Term>
+</Glossary>
+
+## Money
+
+<Glossary>
+  <Term word="TreeBudget">One token allowance shared <strong>by reference</strong> across an agent tree, so &ldquo;the whole run stops at 600,000 tokens&rdquo; is true rather than approximately true. <a href="/learn/ledger/one-wallet">→</a></Term>
+  <Term word="spend gate">A ceiling on the <em>estimated</em> cost of a sampling request, per server. Refuses synchronously; a human's grant lands on the next attempt. <a href="/learn/ledger/gate-cannot-pause">→</a></Term>
+  <Term word="ledger">A row for every model call a server asked for — allowed <em>and</em> refused. A ledger with no refusals in it is indistinguishable from a gate that is switched off.</Term>
+  <Term word="prompt caching">A <strong>prefix match</strong> on the unchanging head of your request. One breakpoint on the system block cut project #2's input cost 47%. Interpolate a timestamp into the prefix and every hit silently becomes a miss. <a href="/learn/host/the-meter">→</a></Term>
+  <Term word="cache read / cache write">A cache read costs about a tenth of a fresh token; a write costs a little more than one. Report both, because <code>input_tokens</code> is only what you paid full price for.</Term>
+  <Term word="input_tokens">Only the <strong>uncached remainder</strong>. The real prompt size is <code>input + cache_creation + cache_read</code>, and forgetting that is how two runs get compared on the wrong number.</Term>
+</Glossary>
+
+## The wire
+
+<Glossary>
+  <Term word="multi-round-trip">How sampling and elicitation work in the modern era. Round 1 answers <code>input_required</code>; the host does the work; round 2 calls the same tool again with the answer. Needs no held-open connection, which is exactly why it replaced the push. <a href="/learn/ledger/the-finding">→</a></Term>
+  <Term word="input_required">The <code>resultType</code> a server returns instead of a result, meaning &ldquo;I need something from you before I can finish.&rdquo;</Term>
+  <Term word="requestState">An opaque string the server mints and the client echoes back. It travels through a boundary you do not control, so the server must integrity-protect it — the SDK does not. <a href="/learn/ledger/data-not-yours">→</a></Term>
+  <Term word="−32020 / −32021 / −32022">Headers and body disagree · a capability was not declared · unsupported protocol version. <a href="/learn/ledger/protocol-by-hand">→</a></Term>
+</Glossary>

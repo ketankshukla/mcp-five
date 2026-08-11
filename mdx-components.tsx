@@ -8,6 +8,7 @@ import { Stat, StatGrid } from "@/components/mdx/Stat";
 import { Compare } from "@/components/mdx/Compare";
 import { Steps, Step, Checkpoint } from "@/components/mdx/Steps";
 import { GotchaCard } from "@/components/mdx/GotchaCard";
+import { GotchaCompendium } from "@/components/mdx/GotchaCompendium";
 import { CodeBlock } from "@/components/mdx/CodeBlock";
 import {
   ProjectCard,
@@ -57,6 +58,7 @@ const components: MDXComponents = {
   Step,
   Checkpoint,
   GotchaCard,
+  GotchaCompendium,
   ProjectCard,
   ProjectGrid,
   Capability,

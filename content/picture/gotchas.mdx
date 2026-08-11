@@ -4,12 +4,55 @@ emoji: "⚠️"
 summary: "All forty things that actually broke, filterable by project and by category."
 ---
 
-## Coming in a later milestone
+Every one of the five repos ends its build guide with an appendix titled *"the
+N things that actually broke."* Not hypotheticals, not a troubleshooting
+section written from imagination — **the actual failures, with the actual error
+text.**
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/picture/gotchas.mdx`.
+There are forty of them. This is all of them, in one place.
 
-### What will be here
+<Callout type="lesson" title="Why this is the most valuable page on the site">
+  The teaching in sections 1 to 5 is reconstructable. Somebody else could write
+  it, better or worse, from the specification.
 
-All forty things that actually broke, filterable by project and by category.
+  This page is not reconstructable. It is what forty specific mistakes cost,
+  written down at the moment they were understood, by the person who had just
+  spent the afternoon on each one.
+</Callout>
+
+Click any card to see the cause, the fix, and the part that transfers.
+
+<GotchaCompendium />
+
+## What the distribution says
+
+A few things are worth noticing once they are all in one list.
+
+**Eight of the forty had no symptom at all.** They are on the list because
+somebody went looking, not because anything broke. Both reset counters, the
+under-reported ledger row, the price table with an expiry date, the route
+module exporting a helper. **A gotcha with no symptom is the most expensive
+kind**, because the only thing standing between you and it is somebody deciding
+to check.
+
+**Several are the same bug, recurring.** `git check-ignore` lying about
+negations is in projects #3 and #4. The dev server that would not die is in #2,
+#3 and #4. The counter that re-scopes itself is in #3 and #4. The code path
+that skips the shared one is in #3, #4 and #5.
+
+<Callout type="insight" title="Some gotchas are not learned, they are re-encountered">
+  Which is the argument for the appendix existing at all. Writing it down did
+  not stop the same author hitting the same thing one project later — but it
+  did mean the second encounter took a minute instead of an afternoon.
+</Callout>
+
+**The categories shift as the series goes on.** Projects #1 and #2 are almost
+entirely `tooling` — scaffolding, packages, headers, ports. By project #5 the
+list is `protocol`, `cost` and `measurement`. The problems stop being about
+getting the thing to run and start being about whether what it reports is
+true.
+
+**And the two most uncomfortable entries are both about a fix that wasn't
+one.** Project #4's headline ratio, and project #5 discovering that fix had
+never been wired up. Both are on the list because the *documentation* of a
+problem got mistaken for the resolution of it.

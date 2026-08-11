@@ -4,12 +4,164 @@ emoji: "▶️"
 summary: "Clone table, prerequisites, env vars — and which commands spend money and which don't."
 ---
 
-## Coming in a later milestone
+All five projects are public, deployed, and runnable. This page is everything
+you need to get any of them going, and — explicitly — **which commands cost
+money.**
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/picture/run-it.mdx`.
+## The five repos
 
-### What will be here
+| | Repo | Live | Needs |
+|---|---|---|---|
+| 🍪 **1** | [`learn-mcp-5-year-old`](https://github.com/ketankshukla/learn-mcp-5-year-old) | [learn-mcp-5-year-old.vercel.app](https://learn-mcp-5-year-old.vercel.app) | nothing |
+| 🔁 **2** | [`learn-mcp-agent-loop`](https://github.com/ketankshukla/learn-mcp-agent-loop) | [learn-mcp-agent-loop.vercel.app](https://learn-mcp-agent-loop.vercel.app) | `ANTHROPIC_API_KEY` |
+| ✋ **3** | [`learn-mcp-agent-guard`](https://github.com/ketankshukla/learn-mcp-agent-guard) | [learn-mcp-agent-guard.vercel.app](https://learn-mcp-agent-guard.vercel.app) | + `DATABASE_URL` |
+| 👥 **4** | [`learn-mcp-agent-crew`](https://github.com/ketankshukla/learn-mcp-agent-crew) | [learn-mcp-agent-crew.vercel.app](https://learn-mcp-agent-crew.vercel.app) | + `DATABASE_URL` |
+| 💸 **5** | [`learn-mcp-agent-ledger`](https://github.com/ketankshukla/learn-mcp-agent-ledger) | [learn-mcp-agent-ledger.vercel.app](https://learn-mcp-agent-ledger.vercel.app) | + `DATABASE_URL` |
 
-Clone table, prerequisites, env vars — and which commands spend money and which don't.
+Each one is a sequel that copies the previous repo's `lib/` wholesale, so
+project #5 contains all five projects' worth of machinery. **If you only clone
+one, clone #5** — every earlier checkpoint still runs in it.
+
+## Prerequisites
+
+- **Node 20+** and npm.
+- **Project #1 needs nothing else.** A server costs nothing to run and nothing
+  to deploy.
+- **Projects #2–#5** need an `ANTHROPIC_API_KEY`.
+- **Projects #3–#5** also need a Postgres `DATABASE_URL`.
+
+### Getting a database without a credit card
+
+```bash
+npx vercel install neon
+npx vercel env pull .env.local
+```
+
+It provisions from the Vercel Marketplace, bills through Vercel, **suspends
+rather than charges** if you exceed the free tier, and never asks for a card.
+
+<Callout type="gotcha" title="Check .gitignore afterwards">
+  Every Vercel command that writes `.env.local` may append its own `.env*` line
+  to the **end** of `.gitignore` — and gitignore is order-sensitive, so it
+  silently kills any `!.env.example` negation above it.
+
+  And verify with `git add -n .env.example`, **not** `git check-ignore -v`,
+  which reports a matching negation with exit 0 and reads like failure.
+</Callout>
+
+## Getting any of them running
+
+```bash
+git clone https://github.com/ketankshukla/learn-mcp-agent-ledger.git
+cd learn-mcp-agent-ledger
+npm install
+cp .env.example .env.local     # add ANTHROPIC_API_KEY and DATABASE_URL
+npm run db:init                # creates the schema and stocks the pantry
+npm run dev
+```
+
+<Callout type="warning" title="`.env.local` is read at startup">
+  If you create or edit it while the dev server is running, **restart**. Next
+  prints `- Environments: .env.local` on boot; if that line is missing, the
+  file wasn't loaded.
+
+  And if restarting appears to change nothing, check the *port* rather than the
+  shell — `Get-NetTCPConnection -LocalPort 3000 -State Listen`. Killing the
+  terminal does not always kill the server, and the old process still has the
+  old environment.
+</Callout>
+
+## Free · these cost nothing at all
+
+No model calls. Run these first, in this order — each proves one layer before
+the next is stacked on it, so **you are never more than one layer away from the
+bug.**
+
+```bash
+npm run mcp:list         # transport — can we reach the servers at all?
+npm run mcp:translate    # schemas convert, and what the gate would stop
+npm run readonly         # resources + prompts            (#5)
+npm run ledger           # who spent what                 (#5)
+npm run evals:replay     # THE $0 SUITE — 13/13 from stored traces  (#5)
+npm run replay           # rewind a past run, including sub-agents  (#3+)
+```
+
+<Callout type="lesson" title="npm run evals:replay is the one to notice">
+  It scores thirteen eval cases against runs you already paid for, and reports
+  **`Tokens spent by this command: 0`**.
+
+  On a fresh clone it will correctly say *nothing to score* — the tapes don't
+  exist yet. That is not a failure.
+</Callout>
+
+## 💸 Paid · these spend real money
+
+<StatGrid>
+  <Stat value="≈$3.00" label="what all of project #5 cost" note="~730k tokens, whole build" />
+  <Stat value="~$0.65" label="the live eval suite, one pass" note="npm run evals -- --all --attempts 1" tone="warn" />
+  <Stat value="~0.1¢" label="one sampling demo" note="npm run sampling" tone="ok" />
+</StatGrid>
+
+```bash
+npm run agent            # the loop, one agent                  — cents
+npm run approval         # THE GATE — approve and deny          — cents
+npm run crew             # THE CREW — the pause bubbles up      — more
+npm run sampling         # a server asks you to think           — ~0.1¢
+npm run sampling -- --deep   # …and gets REFUSED, for $0.00
+npm run evals -- --all --attempts 1     # the live suite        — ~$0.65
+npm run compare          # delegate off vs on                   — expensive
+```
+
+<Callout type="warning" title="`npm run compare` at 240 jars is about a million tokens a go">
+  ```bash
+  PANTRY_JARS=240 npm run db:init
+  PANTRY_JARS=240 npm run dev
+  PANTRY_JARS=240 npm run compare
+  ```
+
+  **All three need the same value** — the MCP server builds its input schema at
+  startup, so a dev server launched without it serves a 60-jar schema no matter
+  what you reseeded.
+
+  And before starting an expensive script a second time, confirm the first one
+  is actually dead. Two concurrent `compare` runs once exhausted an API credit
+  balance and produced a confident 0%-in-both-modes result that looked like a
+  finding.
+</Callout>
+
+## The demo worth running
+
+Three commands, and it is the whole of project #5:
+
+```bash
+npm run ledger -- --ceiling kitchen 2     # two cents per request
+npm run sampling -- --deep                # 🛑 your host tells your own server no
+npm run ledger -- --grant kitchen 8       # a human says "yes, this once"
+npm run sampling -- --deep                # …and now it goes through
+```
+
+<Terminal>
+{`🛑 The Kitchen → summarise_week  [claude-sonnet-5]  6.0¢ estimated — REFUSED, $0.00 spent
+
+  tokens on the tab   : 0
+  refused (not spent) : 6.0¢  ← what the ceiling saved you`}
+</Terminal>
+
+## Plug project #1 into Claude
+
+The cheapest way to feel MCP working, and it costs nothing:
+
+```bash
+claude mcp add --transport http cookie-jar https://learn-mcp-5-year-old.vercel.app/api/mcp
+```
+
+Then say **"roll me three twenty-sided dice"** and watch it reach into the jar.
+
+Or poke the live server directly, with no client at all:
+
+```bash
+curl -X POST https://learn-mcp-5-year-old.vercel.app/api/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```

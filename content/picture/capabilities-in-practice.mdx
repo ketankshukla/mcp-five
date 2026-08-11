@@ -4,12 +4,133 @@ emoji: "🧰"
 summary: "Having built all five: which one is 90% of the value, and which one nobody demos."
 ---
 
-## Coming in a later milestone
+[The five capabilities](/learn/start/five-capabilities) sorted them by who
+pulls the trigger. This page is the verdict after building all of them.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/picture/capabilities-in-practice.mdx`.
+## 🔧 tools — 90% of the value and 100% of the tutorials
 
-### What will be here
+Everything in projects #1 through #4 is tools. Four projects, an approval gate,
+a crew of sub-agents, a whole cost-measurement apparatus — one capability.
 
-Having built all five: which one is 90% of the value, and which one nobody demos.
+That ratio is not a criticism. Tools genuinely are where the value is, and the
+tutorials are right to concentrate on them.
+
+<Callout type="lesson" title="But the 100% is worth worrying about">
+  Four projects into a series **named after the protocol**, only one of five
+  capabilities had been touched. Nobody noticed until project #4's `NEXT_STEP`
+  went looking.
+
+  If the entire ecosystem's teaching material covers one fifth of a
+  specification, the other four fifths are not obscure — they are *invisible*,
+  which is a different and more fixable problem.
+</Callout>
+
+## 📄 resources — what you'll actually reach for, and nobody demos it
+
+The boring one. `resources/list`, then `resources/read` with a URI. It is
+`tools/call` with an address instead of arguments, and it took an afternoon.
+
+<Callout type="quote">
+  A **tool** is something the *model* decides to invoke.
+  A **resource** is something the *host* decides to show it.
+</Callout>
+
+And that is why it matters more than its reputation: **most of what an agent
+needs is not an action.** It is context — the current config, the schema, the
+open tickets, the file you are looking at. Making that a *tool* means the model
+has to decide to go and get it, spend an iteration doing so, and pay for the
+round trip. Making it a resource means the host just puts it in front of the
+model.
+
+<Callout type="insight" title="The find that makes the point">
+  When project #5 finally enumerated capabilities across every server it could
+  reach, **project #1's live deployment was offering a resource and a prompt
+  that nobody remembered writing** — correctly, to anybody who asked, for the
+  entire series.
+
+  Nobody had ever asked.
+</Callout>
+
+## 💬 prompts — the least glamorous and the most sensible
+
+`prompts/list`, `prompts/get`, returns some messages. A saved fill-in-the-blank
+instruction that a **human** picks off a menu.
+
+It is the capability least likely to appear in a demo, and it is the one with
+the clearest ownership story: the server author knows how to ask their own
+service for things, and the user chooses when to use that knowledge. No model
+in the loop deciding anything.
+
+<Callout type="gotcha" title="And the one real trap in the boring capability">
+  A server-supplied prompt is an **offer**, not an instruction. Project #5's
+  host fetches it and hands it back as text for a human to look at — it does
+  **not** splice it into the model's conversation.
+
+  A host that piped server-supplied prompts directly into its own model would
+  have built a prompt-injection channel with good manners.
+</Callout>
+
+## 🧠 sampling — it changes the relationship
+
+This is the one that is genuinely different, and it is the reason project #5
+exists.
+
+Every server in the first four projects was a vending machine: request in,
+result out, and it costs you exactly what you put in. Sampling makes the server
+a **contractor with your account number**. It has no API key and no model. It
+has yours.
+
+<StatGrid>
+  <Stat value="13" label="model calls servers asked for" note="in project #5" />
+  <Stat value="13.0¢" label="allowed and spent" note="8 requests" tone="ok" />
+  <Stat value="24.2¢" label="refused, at $0.00 actual" note="5 requests" tone="danger" />
+</StatGrid>
+
+Two things to carry, if you implement it:
+
+**The naive version does not work on serverless.** Every tutorial shows
+`server.createMessage()`, a server→client push. A push needs a connection; a
+serverless function has a request and then it doesn't. The modern protocol era
+replaced it with a **retry**. See [The finding](/learn/ledger/the-finding).
+
+**The danger is opt-in, and one line wide.** The host declares
+`capabilities: { sampling: {} }`. Delete it and every sampling request from
+every server fails at the protocol layer — before your gate, your estimate or
+your ledger is involved.
+
+<Callout type="quote">
+  The safest configuration is one character shorter than the useful one.
+</Callout>
+
+## 🙋 elicitation — costs nothing, needs no gate
+
+The server asks **your user** a question, mid-call, and waits. Same
+multi-round-trip shape as sampling, pointed at a person instead of a model.
+
+It is the only capability that needs no spend gate, and the reason is worth
+stating precisely: **the scarce resource here is attention, not money.**
+
+<Callout type="insight" title="Which does not mean it is free">
+  It means the budget being spent is a different one, and nobody bills you for
+  it. A server that elicits three times per call is expensive in exactly the
+  way [an over-eager approval gate](/learn/gate/default-allow) is expensive —
+  it burns the user's willingness to read, and once that is gone every
+  subsequent question gets answered by reflex.
+
+  If you build a host that supports elicitation, the control you want is a
+  **rate limit**, not a ceiling.
+</Callout>
+
+Project #5 built the plumbing and one tool that uses it (`discard_batch`).
+Only the browser UI is missing, which is the honest status: the protocol half
+works, and nobody has designed the interruption yet.
+
+## The summary table
+
+| Capability | Reach for it when | Watch out for |
+|---|---|---|
+| 🔧 **tools** | the model should decide to act | the description is the whole ballgame |
+| 📄 **resources** | the host knows what context is needed | nobody demos it, so you will forget it exists |
+| 💬 **prompts** | a human should pick a saved recipe | it is an offer, not an instruction |
+| 🧠 **sampling** | a server needs intelligence it cannot afford | the push doesn't work; gate on the estimate |
+| 🙋 **elicitation** | the server needs a human decision mid-call | attention is the budget |

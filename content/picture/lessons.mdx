@@ -4,12 +4,155 @@ emoji: "🎓"
 summary: "The transferable ones, each with the project that earned it and the failure that proved it."
 ---
 
-## Coming in a later milestone
+Six lessons, and the test for being on this list is strict: it has to be true
+about code that has nothing to do with MCP, and it has to have been **paid
+for** — there is a specific failure behind each one.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/picture/lessons.mdx`.
+## 1 · Read the types on disk
 
-### What will be here
+<Callout type="quote">
+  Don't trust the blog post. Read the types you installed.
+</Callout>
 
-The transferable ones, each with the project that earned it and the failure that proved it.
+**Earned in:** project #1 · **and again in all four sequels**
+
+The `.d.ts` files are ground truth for the version on your disk, and they
+cannot be out of date. Five minutes reading them beats an hour of guessing.
+
+**The failure that proved it:** project #1 copied a current-looking tutorial
+and got `Property 'tool' does not exist on type 'McpServer'` — every tutorial
+online used the 1.x API and the installed package was 2.x.
+
+**And the biggest payoff, four projects later:** the types said `@deprecated`
+next to `createMessage()`, the function every sampling tutorial recommends,
+with the reason beside it. Project #5's entire architecture came out of reading
+that line instead of the example.
+
+<Callout type="lesson">
+  A deprecation notice on the thing you were about to build on is worth more
+  than a working example of it.
+</Callout>
+
+## 2 · Prefer unreachable over caught
+
+<Callout type="quote">
+  A counter can be off by one. An absence cannot.
+</Callout>
+
+**Earned in:** project #4
+
+There is no depth counter in the crew. A sub-agent is started with
+`delegate: false`, so `spawn_agent` is **not in its tool list at all**. It
+cannot recurse for the same reason you cannot dial a phone number that was
+never printed.
+
+**The failure that proved it:** two *other* counters in the same series both
+broke in the same way. Project #3's `MAX_ITERATIONS` reset to zero on every
+resume, so a run that paused nine times got nine budgets. Project #4's
+`MAX_SPAWNS` did the identical thing, hidden in a closure where it was even
+harder to see.
+
+Both were counters that silently re-scoped themselves when an operation was
+split across HTTP requests. The tool list had no such problem, because there
+was nothing to carry across the boundary.
+
+## 3 · A failure message that doesn't say what failed will be mistaken for data
+
+**Earned in:** project #4 · **again in** #3 and #5
+
+**The failure that proved it:** a 240-jar comparison came back scored **0% in
+both modes**, 0 tokens, 0 jars inspected. That reads like a devastating finding
+about delegation. It was two runs that had both died when the API credit
+balance ran out — the eval's own output said only `stopped: error`, and the
+verdict line dutifully printed *"ONE AGENT IS BETTER"* from two identically
+broken runs.
+
+The same shape appears twice more: [a denial that only says
+"denied"](/learn/gate/the-deny-branch) makes the model retry forever, and [a
+spend refusal that only refuses](/learn/ledger/gate-cannot-pause) makes the
+server's own model retry at a full round trip each time.
+
+<Callout type="lesson">
+  The model has no channel for out-of-band information. An error string is not
+  diagnostics — **it is a prompt**, and it should be written like one. A red
+  tick with no explanation is worse than no tick.
+</Callout>
+
+## 4 · Compare the same amount of work
+
+<Callout type="quote">
+  Any comparison between two configurations has to check that they did the same
+  work, not just that they both ran.
+</Callout>
+
+**Earned in:** project #4 · **and it had to be earned twice**
+
+**The failure that proved it:** the crew comparison reported **1.87×** and
+concluded *"delegation is pure overhead."* Two of the eval cases are
+delegation-only, so a 3-attempt run is 3 runs in single mode and 6 in crew
+mode. Part of what "1.87×" measured was *the crew did twice as many runs*.
+
+Every individual number in that report was accurate. **The division was the
+lie**, which is exactly why it survived review.
+
+**And then the sting.** Project #4 documented the bug, wrote the fix, built
+`usageByGroup` to do it properly — and never wired it to the headline ratio.
+Project #5 found it still live and turned **2.01× into 1.08×**.
+
+<Callout type="warning" title="A documented fix is not a fix">
+  The appendix entry, the code comment and the helper data structure all
+  existed, and all described a behaviour the program did not have. The only
+  evidence that a fix works is **the output of the fixed program**.
+</Callout>
+
+## 5 · Re-scope every counter when you split an operation across requests
+
+**Earned in:** project #3 · **repeated verbatim in** project #4
+
+Pausing an agent does not just add a feature. **It changes what "one run"
+means** — and anything scoped to a run has to be re-scoped by hand.
+
+| What broke | Where it hid |
+|---|---|
+| `MAX_ITERATIONS` reset to 0 on resume | top of the loop |
+| `MAX_SPAWNS` reset to 0 on resume | a closure created per run |
+| the trace `seq` counter | would have restarted both requests at 1 |
+
+Note the symptom column that isn't there. **Nothing failed.** None of these
+threw, logged, or showed up in a test. A seatbelt that unbuckles itself every
+time you stop the car looks exactly like a seatbelt.
+
+## 6 · Data does not stay yours by having been yours
+
+**Earned in:** project #5 · **the mirror of project #3's thesis**
+
+<Compare
+  leftLabel="Project #3 — inbound"
+  rightLabel="Project #5 — outbound"
+  left={<><p>A hint the <strong>server</strong> sent <strong>you</strong> is not a permission model.</p><p>Consult a server&apos;s <code>destructiveHint</code> and any server that wants to bypass your gate bypasses your gate.</p></>}
+  right={<><p>State <strong>you</strong> sent the <strong>client</strong> and got back is not your state either.</p><p>You minted it, handed it across a boundary you do not control, and what came home is a string anything in between could have rewritten.</p></>}
+/>
+
+The second is harder to accept than the first, **because you wrote it** — which
+is precisely why people skip the check. `{"jars":3}` becoming `{"jars":300}` is
+one edit away.
+
+<Callout type="insight" title="The tell">
+  If you find yourself writing *"but I generated this value, so it must be
+  valid"* — that is the sentence. It is doing all the load-bearing work in the
+  argument, and it stopped being true the moment the value left the building.
+</Callout>
+
+## Two more that nearly made the list
+
+**A host curates.** The host, not the server, decides what the model can
+reach — hiding a confusing duplicate tool, refusing to read a safety flag,
+withholding `spawn_agent`, overriding a requested model. Four different
+projects, the same instinct, getting less polite each time.
+
+**The bug is the curriculum.** Project #1 shipped a cookie jar that tells lies
+on serverless, said so out loud, and left it in. A tutorial that quietly used
+Postgres from line one would teach you to use Postgres. It would not teach you
+**why**, and you would not recognise the failure the first time you hit it in
+your own code — where nothing will be broken, there will be no error, and there
+will just be a number that is sometimes wrong.
