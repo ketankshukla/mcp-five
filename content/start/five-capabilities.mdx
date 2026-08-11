@@ -4,15 +4,18 @@ emoji: "🗂️"
 summary: "Tools, resources, prompts, sampling, elicitation — sorted by who pulls the trigger."
 ---
 
-The easiest way to keep these straight is not to memorise what they do. It is
-to follow the arrow back to **whoever pulled the trigger**.
+Most MCP material teaches one capability and mentions the rest. This page
+takes all five apart, because the difference between them is not *what they
+do* — it is **who decides**, and that turns out to be the thing that matters.
 
-Three of them are things you ask a server for. One of them is a server asking
-*you* for a model call. One is a server asking your *user* a question. Once you
-sort them that way they stop blurring together.
+## Part 1 · Sort them by who pulls the trigger
+
+Three of them are things **your side asks a server for**. Two of them are a
+server asking **you** for something. Once you sort them that way they stop
+blurring together.
 
 <Diagram
-  caption="The same five capabilities, arranged by who initiates. The top three are ordinary request-and-response. The bottom two point the other way — and that reversal is what project #5 is about."
+  caption="The top three are ordinary request-and-response: you ask, the server answers. The bottom two point the other way — and that reversal is the whole subject of project #5."
 >
 {`flowchart TB
     subgraph ASK["🙋 things YOUR SIDE asks the server for"]
@@ -43,7 +46,17 @@ sort them that way they stop blurring together.
     style P fill:#1e293b,stroke:#4ade80,color:#f8fafc`}
 </Diagram>
 
-## The three that point the ordinary way
+Here is the same thing as a table you can hold in your head:
+
+| | Who decides | On the wire | Costs you |
+|---|---|---|---|
+| 🔧 **tools** | the **model** | `tools/list`, `tools/call` | tokens |
+| 📄 **resources** | the **host** | `resources/list`, `resources/read` | tokens |
+| 💬 **prompts** | the **human** | `prompts/list`, `prompts/get` | tokens |
+| 🧠 **sampling** | the **server** asks; the host decides | an `input_required` retry | **real money** |
+| 🙋 **elicitation** | the **server** asks; the user answers | an `input_required` retry | **attention** |
+
+## Part 2 · The three that point the ordinary way
 
 <Capability
   name="tools"
@@ -51,10 +64,18 @@ sort them that way they stop blurring together.
   oneLiner="A verb. The server does something, and the MODEL decides to invoke it."
   introducedIn="project #1"
 >
-  On the wire: `tools/list` to see what exists, `tools/call` to run one. This
-  is 90% of the value and 100% of the tutorials.
+  On the wire: `tools/list` to see what exists, `tools/call` to run one.
 
-  It is also the only capability projects #1 through #4 ever used.
+  This is 90% of the value and 100% of the tutorials. It is also the only
+  capability projects #1 through #4 ever used.
+
+  The spec calls tools **model-controlled** — the model discovers and invokes
+  them based on its own reading of the situation. Which is exactly why [the
+  description is the whole ballgame](/learn/server/anatomy-of-a-tool), and why
+  a human in the loop is a `SHOULD`:
+
+  > For trust & safety and security, there **SHOULD** always be a human in the
+  > loop with the ability to deny tool invocations.
 </Capability>
 
 <Capability
@@ -65,16 +86,28 @@ sort them that way they stop blurring together.
 >
   On the wire: `resources/list`, then `resources/read` with a URI like
   `cookiejar://status`. Mechanically it is `tools/call` with a URI instead of
-  arguments.
+  arguments, which is why it took an afternoon to add.
 
   The distinction that is easy to blur and worth keeping sharp:
 
   > A **tool** is something the *model* decides to invoke.
   > A **resource** is something the *host* decides to show it.
 
-  Reading a resource is not an action the agent takes. It is context somebody
-  put in front of it.
+  Reading a resource is not an action the agent takes. **It is context somebody
+  put in front of it.**
 </Capability>
+
+<Callout type="insight" title="Why resources are underrated">
+  Most of what an agent needs is **not an action**. It is the current config,
+  the schema, the open tickets, the file you are looking at.
+
+  Make that a *tool* and the model has to decide to fetch it, spend an
+  iteration doing so, and pay for the round trip — and it might not bother.
+  Make it a *resource* and the host simply puts it in the context.
+
+  It is the capability you would reach for most often in anything real, and the
+  one nobody demos.
+</Callout>
 
 <Capability
   name="prompts"
@@ -82,20 +115,35 @@ sort them that way they stop blurring together.
   oneLiner="A saved fill-in-the-blank instruction that a HUMAN picks off a menu."
   introducedIn="project #5"
 >
-  On the wire: `prompts/list`, then `prompts/get`, which returns some messages.
+  On the wire: `prompts/list`, then `prompts/get`, which returns messages.
 
-  There is a security point hiding in the least glamorous capability. A
-  server-supplied prompt is an **offer**. Project #5's host fetches it and
-  hands it back as text for a human to look at — it does not splice it into the
-  model's conversation.
-
-  <Callout type="gotcha" title="A host that piped these straight in">
-    …would have built a prompt-injection channel with good manners. The text
-    comes from a machine you don't control.
-  </Callout>
+  The least glamorous capability, and the one with the clearest ownership
+  story: the server author knows how to ask their own service for things, and
+  the user chooses when to use that knowledge. No model in the loop deciding
+  anything.
 </Capability>
 
-## The two that point back
+<Callout type="gotcha" title="A server-supplied prompt is an OFFER, not an instruction">
+  Project #5's host fetches it and hands it back as **text for a human to look
+  at**. It does not splice it into the model's conversation.
+
+  A host that piped server-supplied prompts directly into its own model would
+  have built a **prompt-injection channel with good manners** — text written by
+  a machine you don't control, arriving in the model's instructions.
+
+  The dullest capability has the sharpest footgun.
+</Callout>
+
+## Part 3 · The two that point back
+
+Here is what makes these genuinely different, and it is structural rather than
+a matter of degree.
+
+For tools, resources and prompts, the worst a server can do is **give you a bad
+answer**. You asked, it replied, you decide what to do with the reply.
+
+For sampling and elicitation, the server is **asking you to spend something** —
+and the thing being spent is yours.
 
 <Capability
   name="sampling"
@@ -103,13 +151,16 @@ sort them that way they stop blurring together.
   oneLiner="The server asks YOUR host to run a model call. It has no API key and no model — it has yours."
   introducedIn="project #5"
 >
-  On the wire, in the modern protocol era, it is not a push at all. It is a
-  *retry*: the server answers your `tools/call` with `input_required`, you run
-  the model, and you call the same tool again carrying the answer.
+  Why would anyone want this? Because a small server can be *smart* without
+  being expensive to run. Project #5's kitchen server can read the pantry's
+  whole event log, but it has no language model and no reason to buy one. So it
+  asks the thing that definitely has one — the host that just called it.
 
-  This is the one that is genuinely different, because it is the first time
-  something on the other side of the boundary can **spend your money**. That
-  is why project #5 exists and why it needed a gate.
+  The data never leaves the server's control. **The intelligence is borrowed.**
+
+  That is a genuinely good idea. It just moves the cost onto somebody who did
+  not choose it, which is why the host has to hold the ceiling. See [A budget
+  is not a gate](/learn/ledger/budget-not-gate).
 </Capability>
 
 <Capability
@@ -118,15 +169,68 @@ sort them that way they stop blurring together.
   oneLiner="The server asks YOUR user a question, mid-call, and waits for the answer."
   introducedIn="project #5"
 >
-  Same multi-round-trip shape as sampling, pointed at a person instead of a
-  model.
+  Same shape as sampling, pointed at a person instead of a model. *"What is
+  your GitHub username?"* mid-way through a tool call.
 
-  It costs nothing and needs no spend gate, because the scarce resource here
-  is **attention**, not money. Which does not mean it is free — it means the
-  budget you are spending is a different one, and nobody bills you for it.
+  It needs no spend gate, because the scarce resource is **attention**, not
+  money — which does not make it free. A server that elicits three times per
+  call is expensive in exactly the way [an over-eager approval
+  gate](/learn/gate/default-allow) is expensive.
+
+  If you build a host that supports it, the control you want is a **rate
+  limit**, not a ceiling.
 </Capability>
 
-## Only one of five, for four projects
+## Part 4 · How a server asks, now that it cannot push
+
+This is worth understanding here rather than saving for project #5, because it
+explains a shape you will see everywhere in the modern protocol.
+
+A server has no way to speak first. There is no open connection to push down —
+[each request is its own POST](/learn/server/transports).
+
+So the modern protocol inverts it. When a server needs something from you, it
+**answers your request with a request**:
+
+```text
+round 1   →  tools/call
+          ←  { "resultType": "input_required",
+               "inputRequests": { "summary": { "method": "sampling/createMessage", … } },
+               "requestState": "…" }
+          ·  you do the thing it asked for
+round 2   →  tools/call  + params.inputResponses + params.requestState
+          ←  { "resultType": "complete", "content": [ … ] }
+```
+
+This is called **multi round-trip requests**, and as of `2026-07-28` it is not
+an alternative — it is the only way:
+
+<Callout type="quote">
+  Servers **MUST** send server-to-client requests (such as `roots/list`,
+  `sampling/createMessage`, or `elicitation/create`) using the MRTR pattern.
+  The previous pattern of server-initiated requests is no longer supported.
+  This is a breaking change.
+</Callout>
+
+<Callout type="lesson" title="Which makes the capability declaration a real control">
+  A server **MUST NOT** include an input request for a capability you did not
+  declare. And in the modern era, capabilities travel in **every request**:
+
+  ```json
+  "_meta": {
+    "io.modelcontextprotocol/clientCapabilities": { "sampling": {} }
+  }
+  ```
+
+  So a host that never writes that line **cannot be asked to spend money.** Not
+  "asks and refuses" — the request fails at the protocol layer, before any gate
+  of yours is involved.
+
+  And because it is per-request rather than per-connection, you can declare
+  `sampling` for a server you trust and withhold it from one you don't.
+</Callout>
+
+## Part 5 · Only one of five, for four projects
 
 Here is the honest scorecard as project #5 opened:
 
@@ -144,3 +248,27 @@ Here is the honest scorecard as project #5 opened:
 
   The fourth reverses an arrow, and it took the rest of the project.
 </Callout>
+
+<Callout type="insight" title="One more thing that only surfaced when somebody looked">
+  When project #5 finally enumerated capabilities across every server it could
+  reach, **project #1's live deployment turned out to offer a resource and a
+  prompt that nobody remembered writing** — and to negotiate the modern
+  protocol era.
+
+  It had been advertising them, correctly, to anybody who asked, for the entire
+  series. Nobody had ever asked.
+</Callout>
+
+## What you now know
+
+- Sort the five by **who pulls the trigger**: model, host, human — then the two
+  where the *server* asks.
+- Resources are the underrated one, because most of what an agent needs is
+  context rather than an action.
+- A server-supplied prompt is an offer; splicing it into your model's
+  conversation builds a prompt-injection channel.
+- Sampling and elicitation spend **your money** and **your user's attention**.
+- Servers cannot push any more. They answer with `input_required` and you
+  retry — and that is a `MUST` as of `2026-07-28`.
+- Capabilities are declared **per request**, which makes the dangerous ones
+  opt-in and selectable per server.

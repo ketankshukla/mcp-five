@@ -5,7 +5,10 @@ summary: "Every tutorial shows a server→client push. It cannot work on serverl
 project: 5
 ---
 
-## The obvious way to write it
+This is the best story in the series, and it is really a story about a habit:
+reading what is installed instead of what is written about it.
+
+## Part 1 · The obvious way to write it
 
 Sampling, in every tutorial, article and example you will find, is one line:
 
@@ -15,15 +18,15 @@ const answer = await server.server.createMessage({ ... });   // ❌
 
 The server pushes a request down the connection to the client, the client runs
 the model, the answer comes back up. It reads beautifully. It is in the types.
+It has autocomplete.
 
 It throws.
 
-## Reading the types on disk, before writing any code
+## Part 2 · The habit — read the types on disk first
 
-This is a habit worth stealing, and it is the fifth consecutive project where
-it changed the design.
-
-Before building anything, go and look at what is actually installed:
+Before building anything, go and look at what is actually installed. This is
+the fifth consecutive project where doing so changed the design, and this time
+it changed it most.
 
 ```bash
 npm ls @anthropic-ai/sdk @modelcontextprotocol/server mcp-handler
@@ -33,7 +36,8 @@ grep -rn "createMessage\|registerResource\|registerPrompt\|elicitInput" \
 
 The types say sampling exists. `server.server.createMessage()`,
 `registerResource`, `registerPrompt`, `elicitInput` — all there, all typed. You
-could stop here and start building.
+could stop here and start building, and you would have a working plan and a
+lost week.
 
 **Don't. Every one of them is marked `@deprecated`,** with this beside it:
 
@@ -41,7 +45,7 @@ could stop here and start building.
   the 2026-07-28 revision has no server→client request channel
 </Callout>
 
-So check the constants:
+### So check the constants
 
 ```bash
 node --input-type=module -e "
@@ -57,15 +61,19 @@ No `2026-07-28` anywhere. A constant literally named `LATEST_PROTOCOL_VERSION`
 does not contain the latest protocol version.
 
 <Callout type="gotcha" title="The types and the runtime now disagree">
-  And when they disagree, **the only thing that settles it is running it.** Not
+  The `.d.mts` says *"the 2026-07-28 revision has no server→client channel."*
+  The constants say 2026-07-28 does not exist.
+
+  Both cannot be describing the same thing. And when two authoritative-looking
+  sources disagree, **the only thing that settles it is running it.** Not
   reading more documentation, and certainly not remembering how sampling works.
 
   So: write a throwaway server with one sampling tool, and `curl` it.
 </Callout>
 
-## The probe, and what came back
+## Part 3 · The probe
 
-The naive version first. Here is the actual response:
+### Checkpoint 1 — the naive version fails, and explains itself
 
 <Terminal title="curl → the naive server">
 {`{"result":{"content":[{"type":"text","text":
@@ -79,19 +87,20 @@ Read the last clause slowly, because it is the whole finding:
 
 > *per-request legacy serving cannot receive server-to-client requests*
 
-**A server→client push needs a connection to travel down.** A serverless
-function does not have one. It has a request, and then it doesn't. There is
-nowhere for the push to go.
+<Callout type="lesson" title="A server→client push needs a connection to travel down">
+  A serverless function does not have one. **It has a request, and then it
+  doesn't.** There is nowhere for the push to go.
 
-This is not a bug, and it is not a missing feature. It is structural. Every
-tutorial showing `createMessage()` was written against a long-lived process — a
-local `stdio` server, or something on a box that stays up.
+  This is not a bug and not a missing feature. It is structural. Every tutorial
+  showing `createMessage()` was written against a long-lived process — a local
+  `stdio` server, or something on a box that stays up.
+</Callout>
 
-## A second era, hiding behind an envelope
+### Checkpoint 2 — a second era, hiding behind an envelope
 
 `SUPPORTED_PROTOCOL_VERSIONS` only describes the old `initialize` handshake.
 The modern era does not negotiate at connection time at all, because there is
-no connection. It travels **per request**, in a `_meta` envelope:
+no connection. It travels **per request**, in a `_meta` envelope.
 
 ```bash
 META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
@@ -117,10 +126,10 @@ Same server. Same tool. Different era. And this time:
 
 **There it is.** Sampling is not a callback. It is a **retry**.
 
-## The shape that replaced it
+## Part 4 · The shape that replaced it
 
 <Diagram
-  title="D9 · the multi-round-trip"
+  title="The multi round-trip"
   caption="Round 1 returns input_required rather than a result. The host runs the model itself, then calls the same tool a second time carrying inputResponses and the requestState it was handed. No connection is held open at any point, which is exactly why it works on serverless."
 >
 {`flowchart TB
@@ -146,7 +155,7 @@ Same server. Same tool. Different era. And this time:
     style NO fill:#450a0a,stroke:#ef4444,color:#fecaca`}
 </Diagram>
 
-On the wire it is exactly this:
+On the wire:
 
 ```text
 round 1   →  tools/call
@@ -160,21 +169,38 @@ round 2   →  tools/call  + params.inputResponses + params.requestState
 
 A retry needs no connection at all. Which is precisely why they changed it.
 
-<Callout type="lesson" title="The protocol grew a stateless shape because everything is serverless now">
-  That is the sentence to take away. The 2026-07-28 revision did not remove the
-  server→client channel because pushes are bad design. It removed it because
-  the deployment target moved, and a design that requires a held-open
-  connection stopped being implementable by most of the people trying to
-  implement it.
+### This is now the specification's position, in MUST language
+
+Project #5 found this by probing. The spec states it outright:
+
+<Callout type="quote">
+  Servers **MUST** send server-to-client requests (such as `roots/list`,
+  `sampling/createMessage`, or `elicitation/create`) using the MRTR pattern.
+  The previous pattern of server-initiated requests is no longer supported.
+  **This is a breaking change.**
 </Callout>
 
-## And the reason this counts as a finding
+And it applies to more than sampling. `roots/list` and `elicitation/create` use
+the identical mechanism — the pattern is called **multi round-trip requests**,
+and it is the general answer to *"how does a server ask for anything?"*
 
-The whole thing was discovered by writing a throwaway server and curling it —
-not by remembering how sampling works, and not by reading a guide.
+Servers may only return `input_required` on three requests: `tools/call`,
+`resources/read`, and `prompts/get`.
 
-Two of the three things that stage cost a round trip each are silent failures.
-Everything looks fine; nothing happens.
+<Callout type="lesson" title="The protocol grew a stateless shape because everything is serverless now">
+  That is the sentence to take away. The revision did not remove the
+  server→client channel because pushes are bad design. It removed it because
+  **the deployment target moved**, and a design requiring a held-open
+  connection stopped being implementable by most of the people trying to
+  implement it.
+
+  Every removal in that revision — sessions, the GET stream, resumable streams,
+  pushes — replaces stateful machinery with a self-contained request.
+</Callout>
+
+## Part 5 · Three things that cost a round trip each
+
+All silent failures. Everything looks fine; nothing happens.
 
 | Symptom | Cause |
 |---|---|
@@ -182,7 +208,48 @@ Everything looks fine; nothing happens.
 | `-32021` "client capabilities do not declare the required capability" | you didn't put `sampling: {}` in the envelope. **This is why the danger is opt-in.** |
 | the handler asks for the same thing forever | `acceptedContent()` is elicitation-only. Sampling needs `inputResponse(responses, key)` → `{kind:"sampling", result}` |
 
+That third one is worth expanding, because it is an *infinite loop that costs
+money*. The two readers are not even the same shape: a sampling view wraps its
+payload in `.result`, while an elicitation view is **flattened** — `action` and
+`content` sit directly on it. Use the wrong reader and you get `undefined`,
+which is indistinguishable from *"no answer yet"*, so the handler asks again.
+And each ask is a full model call.
+
+<Callout type="insight" title="Both cost exactly one compile error to discover">
+  Which is the cheapest way this project found anything out. **Let the compiler
+  tell you the shape instead of guessing at it in prose.**
+</Callout>
+
+And one placement detail that is pure trap: `inputResponses` and `requestState`
+are **top-level members of `params`** — *not* inside `_meta`, where the rest of
+the modern-era machinery lives. Put them in `_meta` and the server never sees
+them, so it asks again. It looks like a loop bug. It is a placement bug.
+
+## Part 6 · Why this counts as a finding
+
+The whole thing was discovered by writing a throwaway server and curling it —
+not by remembering how sampling works, and not by reading a guide.
+
 <Callout type="quote">
   A deprecation notice on the thing you were about to build on is worth more
   than a working example of it.
 </Callout>
+
+That is the transferable part. A working example tells you that something
+*used* to work in *somebody's* environment. A deprecation notice tells you what
+the maintainers know about where it is going — and it is sitting in your
+`node_modules`, for free, with the reason attached.
+
+## What you now know
+
+- Every sampling tutorial shows `createMessage()`, a server→client **push**.
+- A push needs a connection; a serverless function has a request and then it
+  doesn't. The SDK's own error says exactly this.
+- `LATEST_PROTOCOL_VERSION` describes only the handshake-negotiated era, so it
+  does not list `2026-07-28`.
+- The replacement is a **retry**: `input_required` → you do the work → call the
+  same tool again with `inputResponses` and `requestState`.
+- That pattern (**MRTR**) is now a `MUST`, is a documented breaking change, and
+  covers roots and elicitation too.
+- `inputResponses` and `requestState` go at the **top level of `params`**.
+- When types and constants disagree, **the wire is the tiebreaker**.
