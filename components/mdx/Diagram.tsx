@@ -79,16 +79,23 @@ export function Diagram({ title, caption, children }: Props) {
           fontFamily: "Inter, sans-serif",
           fontSize: "16px",
         },
-        // useMaxWidth: false is deliberate and load-bearing.
+        // Diagrams fit the content column. No boxes, no scrollbars.
         //
-        // With it on, Mermaid scales a diagram down to its container's width.
-        // A five-node left-to-right flowchart with real labels is ~2000px
-        // wide, so in a 583px column it renders 43px tall — present, correct,
-        // and completely unreadable. The container below has overflow-x, so
-        // the right answer is to let the diagram be its natural size and
-        // scroll inside its own box.
-        flowchart: { curve: "basis", padding: 16, useMaxWidth: false },
-        sequence: { actorMargin: 60, mirrorActors: false, useMaxWidth: false },
+        // The way to keep them legible is to stop them being absurdly wide in
+        // the first place — so wide comparisons are authored top-to-bottom
+        // rather than left-to-right, and sequence diagrams get tight actor
+        // margins and wrapped messages instead of one enormous line.
+        flowchart: { curve: "basis", padding: 12, useMaxWidth: true },
+        sequence: {
+          actorMargin: 28,
+          boxMargin: 8,
+          noteMargin: 8,
+          messageMargin: 28,
+          wrap: true,
+          width: 140,
+          mirrorActors: false,
+          useMaxWidth: true,
+        },
       });
 
       try {
@@ -116,13 +123,13 @@ export function Diagram({ title, caption, children }: Props) {
         </figcaption>
       ) : null}
 
+      {/* No border, no background, no scrollbar. The diagram sits on the page
+          like an illustration and fits the column. */}
       <div
         ref={hostRef}
         role="img"
         aria-label={caption ?? title ?? "Diagram"}
-        className={`scroll-box thin-scroll rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--surface-1)] px-4 py-6 ${
-          svg ? "anim-fade" : ""
-        }`}
+        className={svg ? "anim-fade" : ""}
       >
         {error ? (
           <pre className="m-0 border-0 bg-transparent p-0 text-[0.8125rem] whitespace-pre-wrap text-[var(--danger)]">

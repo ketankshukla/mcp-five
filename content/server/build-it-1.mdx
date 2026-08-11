@@ -128,7 +128,7 @@ in the repo. This is the shape of it, and the two things that actually broke.
 <Diagram
   caption="Push to GitHub, Vercel builds, and Claude sees the new tool on its next tools/list. There is no registration step and nothing to tell the model — it re-reads the list and your description does the rest."
 >
-{`flowchart LR
+{`flowchart TB
     EDIT["✏️ add a tool in<br/>route.ts"] --> COMMIT["git commit"]
     COMMIT --> PUSH["git push origin main"]
     PUSH --> GH["🐙 GitHub"]

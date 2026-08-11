@@ -59,9 +59,10 @@
 
   /* layout */
   --sidebar-w: 300px;
-  --onthispage-w: 220px;
-  --measure: 74ch;
-  --measure-wide: 92ch;
+  /* Menu on the left, contents on the right. Two columns, and the contents
+     column gets everything the sidebar doesn't. */
+  --measure: 82ch; /* running prose — still a comfortable line length */
+  --measure-wide: 100%; /* diagrams, tables, terminals — the whole column */
 }
 
 @theme inline {
@@ -166,6 +167,18 @@ body {
   max-width: 100%;
 }
 
+/* Inline code is the one thing that reliably breaks the "no horizontal page
+   scroll" rule. A token like `@modelcontextprotocol/server` or a whole grep
+   command has no break opportunity Chrome will take on its own, so at 375px it
+   pushes the page sideways. `break-word` only splits when there is genuinely
+   no alternative, which is exactly the wanted behaviour.
+
+   `pre code` is unaffected: it keeps `white-space: pre` and scrolls inside its
+   own box instead. */
+code {
+  overflow-wrap: break-word;
+}
+
 /* --------------------------------------------------------------------------
    Motion. Everything animated is wrapped in a no-preference query, so
    `prefers-reduced-motion: reduce` gets a completely still site by default.
@@ -178,6 +191,31 @@ body {
 
   .anim-fade {
     animation: fade 240ms ease-out both;
+  }
+
+  /* The home hero's one indulgence: a 20s accent drift. Only the movement is
+     inside this query — the gradient itself is defined unconditionally below,
+     so reduced-motion still gets the colour, just perfectly still. */
+  .hero-glow {
+    animation: drift 20s ease-in-out infinite alternate;
+  }
+}
+
+.hero-glow {
+  background: radial-gradient(
+    50% 50% at 50% 50%,
+    var(--accent-2) 0%,
+    var(--accent-4) 45%,
+    transparent 72%
+  );
+}
+
+@keyframes drift {
+  from {
+    transform: translate(-52%, -6%) scale(1);
+  }
+  to {
+    transform: translate(-48%, 6%) scale(1.12);
   }
 }
 

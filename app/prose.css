@@ -10,25 +10,33 @@
    Steps list would grow an accent bullet.
    ========================================================================== */
 
+/* The article fills the content column. Running TEXT is then held to a
+   readable measure individually, so that diagrams, tables and terminals can
+   use the whole width without being boxed or scrolled. */
 .prose {
-  max-width: var(--measure);
+  max-width: 100%;
   font-size: 1.1875rem;
   line-height: 1.75;
   color: var(--text);
 }
 
-/* Wide elements — diagrams, tables, terminals — break the measure. They stay
-   centred on the text column and scroll inside themselves if they overflow. */
-.prose .breakout {
-  width: min(var(--measure-wide), 100%);
-  max-width: min(var(--measure-wide), 100%);
+.prose > p,
+.prose > h1,
+.prose > h2,
+.prose > h3,
+.prose > h4,
+.prose > ul,
+.prose > ol,
+.prose > blockquote,
+.prose > hr {
+  max-width: var(--measure);
 }
 
-@media (min-width: 1024px) {
-  .prose .breakout {
-    width: min(var(--measure-wide), calc(100% + 9rem));
-    margin-left: calc((min(var(--measure-wide), calc(100% + 9rem)) - 100%) / -2);
-  }
+/* Wide elements — diagrams, tables, terminals — use the full content column
+   rather than the reading measure. */
+.prose .breakout {
+  width: 100%;
+  max-width: 100%;
 }
 
 /* --------------------------------------------------------------------------
@@ -241,14 +249,17 @@ figure[data-rehype-pretty-code-figure] {
   position: relative;
 }
 
-[data-line] {
+/* Must be scoped to `pre`. rehype-pretty-code puts `data-line` on INLINE code
+   too, so an unscoped `width: 100%` turns every `like this` in a sentence into
+   a full-width bar on its own line. */
+pre [data-line] {
   display: inline-block;
   width: 100%;
   padding-inline: 0.25rem;
 }
 
 /* ```ts {2,5-7} — the lines worth looking at get an accent gutter. */
-[data-highlighted-line] {
+pre [data-highlighted-line] {
   background: color-mix(in oklab, var(--accent) 12%, transparent);
   box-shadow: inset 3px 0 0 0 var(--accent);
 }
@@ -318,12 +329,9 @@ mark[data-highlighted-chars] {
    variables cannot reach.
    -------------------------------------------------------------------------- */
 
-/* NOT `max-width: 100%`. Mermaid renders at natural size (useMaxWidth is off,
-   see Diagram.tsx) so that a wide diagram stays legible; constraining it here
-   would undo that and squash it right back down. The parent scrolls instead.
-   `margin-inline: auto` centres the ones that are narrower than the column. */
+/* Diagrams fit the column. No scrollbar, no box. */
 .mermaid-svg svg {
-  max-width: none;
+  max-width: 100%;
   height: auto;
   display: block;
   margin-inline: auto;

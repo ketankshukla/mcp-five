@@ -19,7 +19,7 @@ Now imagine connecting one more server — one with a `delete_file` tool.
 <Diagram
   caption="There is no gap between the model choosing and the tool running. Nowhere for a human to stand, and nowhere to even take notes."
 >
-{`flowchart LR
+{`flowchart TB
     U["🧑 'clean up the old build files'"] --> M["🧠 model picks<br/>delete_file"]
     M --> R["▶️ it runs.<br/><b>immediately.</b>"]
     R --> GONE["💥 files gone"]
@@ -73,6 +73,8 @@ tiebreaker.
         G3["⏸️ on the list -> ask a human"]
         G1 --> G2 --> G3
     end
+
+    BAD ~~~ GOOD
 
     style BAD fill:#450a0a,stroke:#ef4444,color:#fecaca
     style GOOD fill:#052e16,stroke:#4ade80,color:#dcfce7

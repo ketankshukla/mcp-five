@@ -2,8 +2,6 @@ import { notFound } from "next/navigation";
 import type { CSSProperties } from "react";
 import type { Metadata } from "next";
 import { Pager } from "@/components/layout/Pager";
-import { OnThisPage } from "@/components/layout/OnThisPage";
-import { headingsFor } from "@/lib/headings";
 import { getPage, learnParams, TOTAL_PAGES } from "@/lib/navigation";
 
 type Params = { section: string; page: string };
@@ -45,17 +43,15 @@ export default async function LearnPage({ params }: { params: Promise<Params> })
   // one .mdx file. A hand-maintained slug → import map would be a third place
   // to edit, and a third place to forget.
   const { default: Content } = await import(`@/content/${section}/${page}.mdx`);
-  const headings = await headingsFor(section, page);
 
   const accent = { "--accent": `var(${entry.section.accentVar})` } as CSSProperties;
 
   return (
-    <>
-      <main
-        id="content"
-        style={accent}
-        className="anim-rise min-w-0 flex-1 px-5 py-12 sm:px-10 lg:px-14 xl:px-16"
-      >
+    <main
+      id="content"
+      style={accent}
+      className="anim-rise min-w-0 flex-1 px-5 py-12 sm:px-10 lg:px-14"
+    >
         {/* The 1px accent rule, so the page still carries its section colour
             once you have scrolled past the h1. */}
         <div
@@ -102,9 +98,6 @@ export default async function LearnPage({ params }: { params: Promise<Params> })
         <div className="max-w-[var(--measure-wide)]">
           <Pager page={entry} />
         </div>
-      </main>
-
-      <OnThisPage headings={headings} accentVar={entry.section.accentVar} />
-    </>
+    </main>
   );
 }
