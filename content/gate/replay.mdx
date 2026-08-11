@@ -5,12 +5,108 @@ summary: "Every loop event was already a row, so rewinding a run costs one `orde
 project: 3
 ---
 
-## Coming in a later milestone
+Phase 4 looked like the ambitious one. It turned out to be nearly free.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/gate/replay.mdx`.
+Not because it was over-estimated, but because of a decision made two projects
+earlier for a completely different reason.
 
-### What will be here
+<Callout type="quote">
+  The loop yields a stream of small JSON events instead of returning one lump
+  at the end.
+</Callout>
 
-Every loop event was already a row, so rewinding a run costs one `order by seq`.
+Project #2 did that so the browser could show a live trace — tool calls
+appearing as they happened rather than a spinner and then everything at once.
+It was a UI decision.
+
+Once each of those events is a **row**, replay is `order by seq`.
+
+## What that buys
+
+No model call. Nothing re-executed. Nothing charged. You are reading back what
+actually happened — including the calls that errored and the ones a human
+refused.
+
+```bash
+npm run replay              # list past runs
+npm run replay latest       # step through the most recent one
+```
+
+<Terminal title="npm run replay latest">
+{`    4  -> CALL  cookiejar__smash_jar  {"confirm":"SMASH"}
+
+    5  ⏸  PAUSED FOR A HUMAN
+         [GATED] cookiejar__smash_jar  {"confirm":"SMASH"}
+                 smash_jar permanently deletes every cookie AND erases the
+                 jar's entire history. There is no undo and no backup.
+    6  <- ERROR   The human operator reviewed this exact call and DENIED it.
+
+  WHO DECIDED WHAT
+  2026-08-10 17:20:13  DENIED    cookiejar__smash_jar  {"confirm":"SMASH"}`}
+</Terminal>
+
+## One counter stitches two requests into one story
+
+Look at those sequence numbers again. That trace spans **two separate HTTP
+requests** — the one that started the run and hit the gate, and the one that
+resumed it after a human clicked.
+
+They read as a single continuous story because of one `seq` counter that
+continues where the first request left off. Same idea as
+[`iterationOffset`](/learn/gate/pausing-is-an-array): when an operation is
+split across requests, every counter has to be carried across the boundary
+deliberately.
+
+Get it wrong and you get two traces that both start at 1, and no way to
+interleave them.
+
+## What gets written down
+
+| Table | Holds |
+|---|---|
+| `jar_state`, `jar_events` | the cookie jar and its whole history |
+| `conversations`, `chat_messages` | what you typed and what it answered |
+| **`runs`** | one trip through the loop — **including `messages` jsonb, the agent's entire state** |
+| `trace_events` | every event the loop yielded, in order — this is what replay reads |
+| `approvals` | who approved or denied what, and when |
+| `eval_runs`, `eval_results` | every score, so runs can be diffed |
+
+The `runs.messages` column is doing double duty and it is worth noticing.
+It is the **pause mechanism** ([the agent is that
+array](/learn/gate/pausing-is-an-array)) and it is also, for free, a complete
+record of the conversation as the model saw it.
+
+## The transferable lesson
+
+<Callout type="lesson">
+  The observability feature was already paid for by an architectural choice
+  made for a different reason.
+
+  Streaming events made a live UI possible in project #2. Written down, the
+  same events made replay almost free here. Scored, they made [a $0 regression
+  suite](/learn/ledger/zero-dollar-evals) possible in project #5.
+
+  **Three features, one decision, and only the first one was the reason for
+  it.**
+</Callout>
+
+The general shape worth stealing: prefer designs that emit a *stream of small,
+described events* over ones that return a single result. The event stream is
+the thing you can persist, replay, score, filter, and show live — and you
+almost never know in advance which of those you will want.
+
+## Where it goes next
+
+Project #4 turns replay into a tree, and it cost one extra `select` and one
+expandable row — because a sub-agent gets a **real row in `runs`** with a
+`parent_run_id`, and its own `trace_events` under its own sequence numbers.
+
+It is not a special kind of thing needing special handling. It is a run with a
+parent. So replaying one is the same handler, recursing exactly the way the
+loop does.
+
+<Callout type="insight" title="When the new feature turns out to be an instance of the old one, you get the tooling for free">
+  One nullable self-reference turned a flat list of runs into a tree, and
+  everything that already worked on runs — status, stop reason, iteration
+  count, token bill, replay — worked on sub-agents on day one.
+</Callout>

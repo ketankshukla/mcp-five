@@ -5,12 +5,170 @@ summary: "The pause travels up, carrying origin, partial_results, and the frozen
 project: 4
 ---
 
-## Coming in a later milestone
+This is the part that stops it being a toy, and it is where the real
+engineering is.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/crew/five-agents-one-human.mdx`.
+## The assumption you didn't know you'd made
 
-### What will be here
+Project #3's approval model has an assumption buried in it so obviously true
+that it is invisible:
 
-The pause travels up, carrying origin, partial_results, and the frozen worker's whole mind.
+<Callout type="quote">
+  The agent that hit the gate is the agent you are talking to.
+</Callout>
+
+The loop stops, the request ends, the browser shows a card, you click, a new
+request restarts *that same loop*.
+
+Delegation destroys it completely. The agent that hits the gate is:
+
+- two levels down,
+- running inside a `Promise.all`,
+- alongside two siblings that are still working,
+- with nobody talking to it and no browser tab of its own.
+
+And if each worker asked separately, you would get three cards at three
+different moments, out of order, each with no context.
+
+<Callout type="lesson" title="Five agents each interrupting you is worse than no delegation at all">
+  You delegated to stop having to hold the details. An approval flow that hands
+  you three context-free decisions has handed the details straight back — and
+  now you are making them under time pressure, out of order.
+</Callout>
+
+## So the pause travels up
+
+<Diagram
+  title="D7 · the approval bubbling up"
+  caption="Worker 2 stops. The whole tree freezes — worker 1's finished report to partial_results, worker 2's entire mind to paused_children, the orchestrator's own state to messages. One card. The HTTP request ends. Minutes later a brand-new request rebuilds worker 2 and tells it yes — and worker 1 is never re-run."
+>
+{`sequenceDiagram
+    autonumber
+    participant H as 🧑 human
+    participant O as 🧠 orchestrator
+    participant W1 as 👷 worker 1
+    participant W2 as 👷 worker 2
+    participant DB as 📓 Postgres
+
+    H->>O: "find every tampered jar, empty only those"
+    O->>W1: spawn_agent("jars 1-20")
+    O->>W2: spawn_agent("jars 21-40")
+
+    rect rgba(56, 189, 248, 0.12)
+        note over W1,W2: both working, in parallel
+        W1->>W1: inspect 20 jars
+        W2->>W2: inspect 20 jars
+        W1-->>O: ✅ report: "3 tampered"
+    end
+
+    rect rgba(239, 68, 68, 0.14)
+        note over W2: worker 2 wants something irreversible
+        W2->>W2: empty_jar { id: 38 }
+        W2--xO: ⏸ STOPPED — needs a human
+    end
+
+    rect rgba(251, 191, 36, 0.14)
+        note over O,DB: freeze the WHOLE tree
+        O->>DB: worker 1's finished report → partial_results
+        O->>DB: worker 2's entire mind → paused_children
+        O->>DB: own state → messages
+    end
+
+    O-->>H: ⏸ ONE card: "worker 2 (jars 21-40) wants to<br/>empty jar 38 — 78g heavy, no AUTHORIZED note"
+    note over H,O: the HTTP request has ENDED.<br/>nothing is running. close the laptop.
+
+    H->>DB: approve (a brand-new request, minutes later)
+    DB-->>W2: rebuilt from jsonb, told "yes"
+    W2->>W2: empties jar 38, carries on
+    W2-->>O: ✅ report: "3 tampered"
+    note over O: worker 1 is NOT re-run —<br/>its report came back from partial_results
+    O-->>H: final answer`}
+</Diagram>
+
+## Three details, and each one is a bug if you skip it
+
+| The detail | What breaks without it |
+|---|---|
+| **`origin` on every bubbled call** | The card says "approve `empty_jar {id:38}`?" and you have no idea which of three workers wants it or what it found. You would be rubber-stamping decisions you cannot see — **worse than not asking, because it looks like oversight.** |
+| **`partial_results`** | Clicking Approve re-runs the two workers that had already finished. You pay for them twice, they may answer differently the second time, and any side effect happens again. |
+| **`paused_children`** | The stopped worker's entire conversation vanishes when the HTTP request ends, and there is nothing left to say yes *to*. |
+
+And the thing that makes all of it work is the same thing that made [project
+#3's pause](/learn/gate/pausing-is-an-array) work:
+
+<Callout type="quote">
+  The agent's whole state is its `messages` array. Persisting three agents is
+  persisting three arrays.
+</Callout>
+
+No continuation, no serialised generator, no coroutine library. The freeze is a
+`return` and the thaw is a function call with a bigger array — three times over
+instead of once.
+
+## The screen
+
+That single approval standing in front of three agents' worth of work is the
+picture the whole project is aiming at:
+
+<Terminal>
+{`══════════════════════════════════════════════════════════════════════════
+  ⏸  ONE APPROVAL, 9 DESTRUCTIVE CALL(S)
+     9 of them came from 3 sub-agent(s) that are frozen mid-task.
+     Frozen sub-agents: "jars 1-20", "jars 21-40", "jars 41-60"
+══════════════════════════════════════════════════════════════════════════
+
+  ⏸  pantry__empty_jar  {"id":46,"reason":"Seal broken (lid gasket …"}
+      asked by : sub-agent "jars 41-60"
+      because  : Seal broken (lid gasket displaced) - not merely scuffed,
+                 no AUTHORIZED note present.
+      host rule: empty_jar permanently destroys every cookie in that jar.`}
+</Terminal>
+
+Nine calls. Three frozen agents. **One decision.**
+
+Note the three lines under each call. `asked by` is `origin`. `because` is the
+worker's own reasoning, carried up. `host rule` is the gate's `reason` from
+[project #3's rule list](/learn/gate/rules-read-arguments). Together they are
+enough to decide without going and reading three traces.
+
+## And it survives a partial no
+
+Eight were approved and the ninth denied. The worker that got the "no" read it
+as an ordinary tool result, adapted, and reported honestly — and the
+orchestrator **surfaced it to the human** rather than quietly dropping it:
+
+<Callout type="quote">
+  One jar flagged but NOT emptied: Jar 59 — it does meet the tampering
+  criteria, but the sub-agent's attempt to empty it was declined. This one
+  still needs your attention.
+</Callout>
+
+<Callout type="lesson" title="Verified against the database, not against the model's summary">
+  8 jars emptied, jar 59 untouched, zero false positives.
+
+  That distinction matters more than it sounds. The model's summary is a claim
+  about what happened. The `jar_events` table is what happened. When you are
+  checking whether an agent did the right thing, check the state — a
+  well-written summary of the wrong actions is the most convincing failure mode
+  there is.
+</Callout>
+
+## Rewinding a tree came free
+
+Nested replay was the *stretch* goal. It cost one extra `select` and one
+expandable row — because of a decision in `lib/run-driver.ts`: **a sub-agent
+gets a real row in `runs`**, with a `parent_run_id`, and its own stream of
+`trace_events` under its own sequence numbers.
+
+It is not a special kind of thing needing special handling. It is a **run with
+a parent**. So it already had a status, a stop reason, an iteration count and a
+token bill, for the same reason every other run does.
+
+<Callout type="insight" title="One deliberate UI choice">
+  Each worker's trace is **collapsed by default**, and lazy-loaded.
+
+  Delegation exists so the details of twenty jar inspections do not have to be
+  in anybody's head — not the orchestrator's, and not yours. The summary is
+  what you normally need. The full trace is there for the ten percent of the
+  time when "trust me" isn't good enough.
+</Callout>

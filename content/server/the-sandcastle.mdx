@@ -5,12 +5,110 @@ summary: "`let cookiesInJar = 12` works on your laptop and lies on serverless. T
 project: 1
 ---
 
-## Coming in a later milestone
+Here is the entire state management of project #1:
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/server/the-sandcastle.mdx`.
+```ts
+let cookiesInJar = 12;
+```
 
-### What will be here
+On your laptop this is perfect. You add twenty cookies, you look in the jar,
+there are thirty-two. Every time.
 
-`let cookiesInJar = 12` works on your laptop and lies on serverless. The bug is the curriculum.
+Deploy it to Vercel and it starts telling lies.
+
+## Many machines, many copies, all asleep
+
+Vercel runs your code on however many machines it feels like, spun up and torn
+down on demand. **Each one gets its own copy of that variable.**
+
+<Diagram
+  caption="Two requests, two machines, two entirely separate copies of the same variable. Machine B has never heard of Machine A and never will. The fix is not a better variable — it is somewhere outside the process for the number to live."
+>
+{`flowchart TB
+    subgraph NOW["❌ What this repo does — memory in a variable"]
+        direction TB
+        U1["you: add 20 cookies"] --> M1["🖥️ Machine A<br/>cookiesInJar = 12 → 32"]
+        U2["you: look in the jar"] --> M2["🖥️ Machine B<br/>cookiesInJar = 12<br/><i>never heard of Machine A</i>"]
+        M2 --> WAT["😕 'The jar has 12 cookies'<br/>where did the 20 go?"]
+    end
+
+    subgraph FIX["✅ What real servers do — memory in a database"]
+        direction TB
+        V1["you: add 20 cookies"] --> N1["🖥️ Machine A"]
+        V2["you: look in the jar"] --> N2["🖥️ Machine B"]
+        N1 --> DB[("🗄️ Neon Postgres<br/>cookies = 32")]
+        N2 --> DB
+        DB --> YAY["😀 'The jar has 32 cookies'<br/>every machine agrees"]
+    end
+
+    style NOW fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style FIX fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style DB fill:#78350f,stroke:#fbbf24,color:#fef3c7
+    style WAT fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+    style YAY fill:#14532d,stroke:#4ade80,color:#dcfce7`}
+</Diagram>
+
+And it is worse than "two machines disagree", because machines also *fall
+asleep*. A function that has been idle gets frozen or discarded. Come back
+twenty minutes later and the count has silently reset to 12 with no request
+having touched it.
+
+<Callout type="quote">
+  Memory in a serverless function is a sandcastle — real, working, and taken by
+  the tide.
+</Callout>
+
+## The bug is the curriculum
+
+This was left in deliberately, and the README says so out loud rather than
+quietly shipping something that works.
+
+<Callout type="lesson" title="Why leaving it in is better than fixing it">
+  A tutorial that quietly used Postgres from line one would teach you to use
+  Postgres. It would not teach you **why**, and you would not recognise the
+  failure the first time you hit it in your own code — where it will not
+  announce itself, because nothing is broken. There is no error. There is just
+  a number that is sometimes wrong.
+
+  You cannot un-see this once you have watched a counter reset on its own.
+</Callout>
+
+Project #3 fixes it, with the same tool, the same protocol and the same
+answers — the count just lives in Postgres now. And the interesting part of
+that fix is what *didn't* change.
+
+## The model cannot tell the difference
+
+That is the payoff, and it is worth sitting with for a second.
+
+`cookie_jar` in project #1 and `cookie_jar` in project #3 present an identical
+interface: same name, same description, same schema, same shape of reply. The
+model calls it and gets a number back. It has no idea whether that number came
+from a variable, a database, or a piece of paper.
+
+<Callout type="insight" title="How you store the cookies was always your private business">
+  Which is exactly why swapping a variable for a database changed nothing about
+  the protocol. The boundary was drawn in the right place, and you only find
+  that out by moving something across it.
+</Callout>
+
+## The fix, in one statement
+
+For completeness, since project #3 does it and it's smaller than you'd expect:
+
+```sql
+update jar_state set cookies = cookies - $1
+ where id = 'default' and cookies >= $1
+ returning cookies
+```
+
+One statement. Read and write together, atomic because it is indivisible — so
+two people eating cookies at the same instant cannot lose one, and the "not
+enough cookies" check cannot race the write either.
+
+The `and cookies >= $1` guard is doing two jobs: it is the business rule *and*
+the concurrency control. Splitting them into a `select` then an `update` would
+reintroduce both bugs at once.
+
+That, and the reason serverless code needs a driver that doesn't hold
+connections, is on [Pausing is an array](/learn/gate/pausing-is-an-array).

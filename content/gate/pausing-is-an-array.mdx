@@ -5,12 +5,161 @@ summary: "The agent's entire state is its messages array — so freezing it mid-
 project: 3
 ---
 
-## Coming in a later milestone
+Here is the problem that shapes the entire design.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/gate/pausing-is-an-array.mdx`.
+A human might take five seconds to decide, or five minutes, or might wander off
+and come back tomorrow. **A serverless function gets 60 seconds and then it
+dies.**
 
-### What will be here
+So the obvious implementation — hold the HTTP connection open and `await` the
+click — works perfectly in development, works for fast clicks in staging, and
+times out in production for *exactly the decisions people thought hardest
+about*.
 
-The agent's entire state is its messages array — so freezing it mid-run is one INSERT.
+<Callout type="gotcha" title="The failure mode is precisely inverted">
+  Easy decisions succeed. Hard ones time out. The gate works flawlessly right
+  up until the moment somebody needs to think, which is the only moment it was
+  built for.
+</Callout>
+
+## So don't hold anything open. End the request.
+
+<Diagram
+  title="D5 · pause and resume across two HTTP requests"
+  caption="Read the grey band in the middle. Nothing is running. There is no process, no held connection, no timer — the agent is a row in Postgres, and it will sit there indefinitely at no cost. A completely different request, possibly on a different machine, picks it up."
+>
+{`sequenceDiagram
+    autonumber
+    actor You as 🧑 You
+    participant UI as 💬 Browser
+    participant API as 🔒 /api/chat
+    participant DB as 🗄️ Postgres
+    participant Claude as 🧠 Claude API
+    participant Jar as 🍪 cookie jar
+
+    rect rgba(56, 189, 248, 0.15)
+        Note over You,Claude: REQUEST 1 — starts a run
+        You->>UI: "Empty the jar completely."
+        UI->>API: POST /api/chat
+        API->>DB: create run (status: running)
+        API->>Claude: messages + 7 tools
+        Claude-->>API: tool_use: cookie_jar { action: "look" }
+        API->>Jar: tools/call — not gated, just run it
+        Jar-->>API: "The jar has 78 cookie(s)."
+        API->>Claude: messages + that result
+        Claude-->>API: tool_use: cookie_jar { action: "eat", count: 78 }
+    end
+
+    rect rgba(239, 68, 68, 0.15)
+        Note over API,DB: ✋ THE GATE — host checks its OWN list
+        API->>API: classifyCall(...) -> "ask"
+        Note right of API: nothing is executed —<br/>not even safe calls in this batch
+        API->>DB: write messages[] + pending call<br/>status: awaiting_approval
+        API-->>UI: event: approval_required
+    end
+
+    rect rgba(100, 116, 139, 0.2)
+        Note over UI,DB: ⏹️ THE REQUEST ENDS HERE.
+        Note over API: the function can now be frozen or destroyed.<br/>nothing is alive. the agent is a row in Postgres.
+        Note over You: seconds, minutes, or tomorrow
+    end
+
+    rect rgba(74, 222, 128, 0.15)
+        Note over You,Jar: REQUEST 2 — a completely new HTTP request
+        You->>UI: clicks [ Approve ]
+        UI->>API: POST /api/resume { runId, decisions }
+        API->>DB: load messages[] — the whole agent
+        API->>Jar: tools/call eat 78
+        Jar-->>API: "Nom nom. Ate 78. 0 cookie(s) left."
+        Note right of API: append tool_result to messages[]<br/>and call the loop again
+        API->>Claude: messages, now including that result
+        Claude-->>API: stop_reason: end_turn
+        API->>DB: status: done
+        API-->>UI: "The jar is now completely empty."
+    end`}
+</Diagram>
+
+## Why this is so little code
+
+Because of something project #2 established for a completely different reason:
+
+<Callout type="quote">
+  The agent loop's entire state is the `messages` array. There is no hidden
+  memory, and no session on Anthropic's side.
+</Callout>
+
+So persisting an agent is **persisting an array**.
+
+```ts
+// pause: the loop stops and hands you its state
+yield { type: "approval_required", calls: pending, messages };
+
+// ...one jsonb column later...
+
+// resume: read it back, append the results, call the loop again
+const messages = [...run.messages, toolResultMessage(results)];
+runAgentLoop({ messages, toolbox, iterationOffset: run.iterations });
+```
+
+There is no continuation, no serialised generator, no coroutine library.
+
+<Callout type="lesson" title="The pause is a `return`. The resume is a function call with a bigger array.">
+  And the resumed loop **never learns it was paused**. A conversation whose
+  last message is a `user` turn full of `tool_result` blocks is just… a
+  conversation.
+
+  This is the payoff for a decision that looked like ordinary hygiene: keeping
+  the loop free of storage concerns. `runAgentLoop` takes `messages` in and
+  yields events out. It has no idea whether those messages came from memory,
+  Postgres, or a text file.
+</Callout>
+
+## The seatbelt that unbuckles itself
+
+One detail that is very easy to miss and costs real money.
+
+```ts
+runAgentLoop({ messages, toolbox, iterationOffset: run.iterations });
+```
+
+Without `iterationOffset`, the 10-iteration cap **resets to zero on every
+resume**. A run that pauses nine times gets nine fresh budgets.
+
+<Callout type="quote">
+  A seatbelt that unbuckles itself every time you stop the car is not a
+  seatbelt.
+</Callout>
+
+The general shape of this bug is worth naming, because project #4 hit the exact
+same one with its spawn cap: **when you split an operation across requests,
+every counter has to be re-scoped.** Anything that was "per run" and is now
+stored and reloaded needs to be carried across the boundary explicitly, or it
+silently becomes "per request."
+
+## Nothing in the batch runs
+
+If the model asks for three tools and one of them is gated, **all three wait.**
+
+Running the two safe ones first would be faster. It would also mean that
+clicking *Deny* leaves you in a world where half the batch already happened —
+so the thing you refused didn't occur, but its two siblings did, and now the
+agent's next step is reasoning about a partially-applied state nobody chose.
+
+All-or-nothing is worth the lost milliseconds.
+
+## And double-clicking Approve must not run it twice
+
+For `smash_jar` that is harmless. For `charge_card` it is not.
+
+The resume route checks the run's status and returns **`409`** on the second
+attempt. The state machine is the idempotency key: a run that is no longer
+`awaiting_approval` cannot be approved again.
+
+<Callout type="insight" title="Why Postgres for this, and not a queue">
+  Because the thing you need is not delivery, it is **a durable place for one
+  object that has a status.** A run is a row; approving it is a conditional
+  update; the whole concurrency story is `where status = 'awaiting_approval'`.
+
+  Reaching for infrastructure heavier than that would have bought a lot of
+  machinery to solve a problem the database already solved.
+</Callout>

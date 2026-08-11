@@ -5,12 +5,153 @@ summary: "Name, description, schema, function — and why the description is the
 project: 1
 ---
 
-## Coming in a later milestone
+Every tool needs exactly four things.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/server/anatomy-of-a-tool.mdx`.
+```ts title="app/api/mcp/route.ts"
+server.registerTool(
+  "roll_dice",                                    // 1. NAME
+  {
+    description: "Roll one or more dice ...",     // 2. DESCRIPTION  ← the important one
+    inputSchema: z.object({                       // 3. SHAPE
+      sides: z.number().int().min(2).max(1000).default(6),
+      times: z.number().int().min(1).max(20).default(1),
+    }),
+  },
+  async ({ sides, times }) => {                   // 4. DO-THING
+    return { content: [{ type: "text", text: "..." }] };
+  }
+);
+```
 
-### What will be here
+Three of those are obvious. One of them is the whole job.
 
-Name, description, schema, function — and why the description is the whole ballgame.
+## The description is the whole ballgame
+
+<Callout type="quote">
+  The description is the only thing the model reads when deciding whether to
+  use your tool.
+</Callout>
+
+Not the name. Not the schema. Not your code, which it never sees. When the
+model is choosing among eleven tools, it is reading eleven paragraphs of
+English and picking one.
+
+Which means a vague description is not a documentation problem. It is a
+**functional** one — your tool silently never gets called, and nothing anywhere
+reports an error. The agent just does something else, or apologises that it
+can't help.
+
+<Callout type="lesson" title="Write it like a job posting, not a variable name">
+  A variable name says what a thing *is*. A job posting says what it is *for*,
+  when you'd want it, and what it isn't. That second one is what the model is
+  trying to answer.
+
+  This is the highest-leverage line in the project, and it is a sentence of
+  prose in the middle of a config object, which is exactly why people skim past
+  it.
+</Callout>
+
+## The schema is a free bouncer
+
+`inputSchema` is a Zod object, which the SDK converts to JSON Schema and ships
+in `tools/list`. It does two jobs at once, and the second is the good one.
+
+It tells the model what shape to send. **And it rejects bad arguments before
+your code runs**, with a message the model can read and correct:
+
+<Terminal>
+{`Input validation error: Invalid arguments for tool roll_dice:
+sides: Too small: expected number to be >=2`}
+</Terminal>
+
+You did not write a line of validation code. You described the shape honestly
+and got the check for free.
+
+<Diagram
+  title="where the checks sit"
+  caption="Two of the three refusals are free — you get them from z.object(). The amber one is the only one you write, and writing it well is what separates a tool that helps from a tool that confuses."
+>
+{`flowchart TB
+    START(["🧠 AI sends tools/call"]) --> EXISTS{"Does a tool<br/>with that name exist?"}
+    EXISTS -->|no| ERR1["❌ Unknown tool<br/><i>AI is told, and can retry</i>"]
+    EXISTS -->|yes| VALID{"Do the arguments match<br/>your inputSchema?"}
+
+    VALID -->|"no — sides: 1"| ERR2["❌ Input validation error<br/>'Too small: expected >= 2'<br/><i>your code never ran</i>"]
+    VALID -->|"yes — sides: 20"| DEFAULTS["⚙️ Missing optional values<br/>filled in from .default"]
+
+    DEFAULTS --> RUN["▶️ YOUR function finally runs"]
+    RUN --> LOGIC{"Your own rules<br/>e.g. enough cookies?"}
+
+    LOGIC -->|no| SOFT["🙅 A polite refusal in plain English<br/>'only 7 cookies in the jar'<br/><i>not a crash — the AI can explain it</i>"]
+    LOGIC -->|yes| OK["✅ content: [ { type: 'text' } ]"]
+
+    SOFT --> BACK(["🧠 back to the AI"])
+    OK --> BACK
+    ERR1 --> BACK
+    ERR2 --> BACK
+
+    style START fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style BACK fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style ERR1 fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style ERR2 fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style SOFT fill:#78350f,stroke:#fbbf24,color:#fef3c7
+    style OK fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style RUN fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe`}
+</Diagram>
+
+### Refuse politely, don't crash
+
+That amber box matters more than it looks. When your own rules say no — there
+aren't 500 cookies in the jar — **return a sentence, not an exception**.
+
+A polite refusal in plain English goes back into the conversation and the model
+adapts: it explains, or proposes something else, or asks you a question. A
+thrown error is noise the model has to guess about.
+
+You will see this pay off in [project #3's demo](/learn/gate/the-deny-branch),
+where the server refuses to eat 500 cookies and the agent recovers gracefully
+without anybody writing recovery logic.
+
+## Annotations, and a warning to carry forward
+
+MCP lets a server describe its own tools:
+
+```ts
+server.registerTool("smash_jar", {
+  description: "PERMANENTLY destroy the cookie jar...",
+  annotations: { destructiveHint: true },   // <- right here
+}, handler);
+```
+
+That is real, it is in the spec, and project #3 sets it **honestly** on its own
+destructive tool.
+
+<Callout type="warning" title="And project #3's host never reads it">
+  Not as a hint. Not as a default. Not as a tiebreaker.
+
+  It is a genuinely useful signal — for a human skimming a tool list, or a UI
+  picking an icon. It is not a permission model, because it arrives over HTTP
+  from a machine you do not control, set by whoever wrote that server.
+
+  The full argument, and why every softer version of the idea dies the same
+  way, is [A hint is not a permission
+  model](/learn/gate/hint-not-permission). It is the most important page in
+  this course.
+</Callout>
+
+## What comes back
+
+A tool returns content blocks, and for most tools that is one block of text:
+
+```ts
+return { content: [{ type: "text", text: "Rolled 3d20 -> [17, 9, 18]  Total: 44" }] };
+```
+
+Note that this is a **sentence**, not JSON. The model reads it the way it reads
+anything else, which is why the loop in project #2 can take *"Total: 44"* out of
+one tool's output and put `44` into the next tool's input without a single line
+of code connecting the two.
+
+If you want structured data instead, add an `outputSchema` and return
+`structuredContent`. Project #1 deliberately doesn't, because the plain-text
+version makes the mechanism visible.

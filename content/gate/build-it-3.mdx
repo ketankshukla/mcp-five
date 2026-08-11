@@ -5,12 +5,205 @@ summary: "Thirteen stages, their checkpoints, and two tools that lie to you."
 project: 3
 ---
 
-## Coming in a later milestone
+Project #3 copies [project #2](/learn/host/a-while-loop)'s `lib/` wholesale —
+the loop, the MCP client, the schema translation — and adds a handbrake.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/gate/build-it-3.mdx`.
+<Steps>
+  <Step n="0–1" title="Prerequisites, and scaffold without a fight">
+    `ANTHROPIC_API_KEY` and a `DATABASE_URL`. Same scaffolding gotcha, third
+    time: temp dir, then copy in.
+  </Step>
 
-### What will be here
+  <Step n={2} title="Read the types first. Again.">
+    <Checkpoint>
+      You can state, without looking, whether `registerTool` can declare a tool
+      destructive (**it can**) and whether your host should believe it (**it
+      should not**).
+    </Checkpoint>
+  </Step>
 
-Thirteen stages, their checkpoints, and two tools that lie to you.
+  <Step n={3} title="Provision Postgres">
+    ```bash
+    npx vercel install neon
+    npx vercel env pull .env.local
+    ```
+
+    It provisions from the Vercel Marketplace, bills through Vercel, suspends
+    rather than charges if you exceed the free tier, and never asks for a card.
+
+    <Checkpoint>
+      `DATABASE_URL` exists and its host contains `-pooler`.
+    </Checkpoint>
+  </Step>
+
+  <Step n={4} title="The notebook">
+    ```bash
+    npm run db:init
+    ```
+
+    <Callout type="gotcha" title="`create table if not exists` will not add your new columns">
+      The table exists, so the statement succeeds, and your new column simply
+      isn't there. No error. The failure surfaces later as a missing field.
+
+      Pair every new column with its own:
+
+      ```sql
+      alter table runs add column if not exists mode text not null default 'single';
+      ```
+    </Callout>
+  </Step>
+
+  <Step n={5} title="The jar that remembers">
+    The same `cookie_jar` tool, backed by Postgres instead of a variable —
+    finally fixing [project #1's
+    sandcastle](/learn/server/the-sandcastle). The model cannot tell the
+    difference, which was the point.
+  </Step>
+
+  <Step n={6} title="Curate the toolbox">
+    Project #1's forgetful jar is **hidden**; the `secret_code` collision is
+    **kept**. See [One shelf, many servers](/learn/host/the-toolbox).
+
+    <Checkpoint>
+      ```bash
+      npm run mcp:list
+      ```
+    </Checkpoint>
+  </Step>
+
+  <Step n={7} title="The permission model">
+    Thirty lines, and the most important file in the project.
+
+    <Checkpoint>
+      `npm run mcp:translate` now ends with the rules table and a per-tool
+      verdict — so you can see which calls would stop **before** running
+      anything.
+    </Checkpoint>
+  </Step>
+
+  <Step n={8} title="The handbrake">
+    The loop learns to stop. `yield { type: "approval_required", calls, messages }`
+    and return.
+  </Step>
+
+  <Step n={9} title="Pause and resume over HTTP">
+    Two routes: `/api/chat` starts a run and **ends** on a pause;
+    `/api/resume` is a brand-new request that thaws it.
+
+    <Checkpoint>
+      The whole feature, in a terminal, before any React exists:
+
+      ```bash
+      npm run approval deny
+      npm run approval approve
+      ```
+    </Checkpoint>
+
+    <Callout type="lesson">
+      Building the feature as a script first is why the UI took an afternoon.
+      A browser is a bad place to debug a state machine.
+    </Callout>
+  </Step>
+
+  <Step n={10} title="The report card">
+    <Checkpoint>
+      ```bash
+      npm run evals -- --attempts 3 --label "baseline"
+      ```
+
+      `18/18`. Then break a gate rule on purpose and watch it go red — a suite
+      you have never seen fail is a suite you have not tested.
+    </Checkpoint>
+  </Step>
+
+  <Step n={11} title="The rewind button">
+    Nearly free, because the events were already rows. See
+    [Replay](/learn/gate/replay).
+  </Step>
+
+  <Step n={12} title="Typecheck, build, ship">
+    <Checkpoint>
+      Verify against production **by exercising the actual feature**:
+
+      ```bash
+      curl -sN -X POST https://YOUR-APP.vercel.app/api/chat \
+        -H "Content-Type: application/json" \
+        -d '{"message":"Empty the jar completely."}' | grep approval_required
+      ```
+
+      Not "the page loads". The gate firing, on the deployed URL.
+    </Checkpoint>
+  </Step>
+</Steps>
+
+## The checkpoints, in order
+
+Each proves one layer before the next is stacked on it, so you are never more
+than one layer away from a bug. The first two cost nothing.
+
+```bash
+npm run mcp:list        # 1. can we reach the servers?        (no AI)
+npm run mcp:translate   # 2. do schemas convert? what's gated? (no AI)
+npm run agent           # 3. does the loop chain its output?
+npm run approval        # 4. THE GATE — approve AND deny
+npm run evals           # 5. the report card
+npm run replay          # 6. the rewind button
+```
+
+## The two tools that lie to you
+
+Project #3's appendix has eight entries. These two are the ones worth
+memorising, because in both cases **the tool tells you something false with a
+confident face.**
+
+<Callout type="gotcha" title="1 — `git check-ignore -v` lies about negations">
+  You add `!.env.example` to un-ignore a file. You check your work:
+
+  ```bash
+  git check-ignore -v .env.example
+  ```
+
+  It prints a matching line and exits **0**. Exit 0 reads like "yes, ignored" —
+  so you conclude the negation didn't work and start editing `.gitignore`
+  again.
+
+  It is actually reporting *which pattern matched*, and the pattern it matched
+  is your negation. The file is fine.
+
+  **Use `git add -n <file>` instead.** It tells you what git will actually do:
+
+  ```bash
+  git add -n .env.example
+  # add '.env.example'          ← it will be added
+  # or: "The following paths are ignored by one of your .gitignore files"
+  ```
+
+  This one bit project #3 *and* project #4, which is how it earned a place in
+  two appendices.
+</Callout>
+
+<Callout type="gotcha" title="2 — the dev server that would not die">
+  You Ctrl-C the shell. You close the terminal. The port is still in use, and
+  your "restarted" server is the old one with the old `.env.local`.
+
+  Killing the shell that started a dev server does not kill the server. Check
+  the **port**, not the shell:
+
+  ```bash
+  Get-NetTCPConnection -LocalPort 3000 -State Listen
+  ```
+
+  Three projects hit this — #2, #3 and #4. When the same surprise recurs three
+  times, the mental model is wrong, not the command: a process is not owned by
+  the terminal you happened to launch it from.
+</Callout>
+
+## The other six
+
+`tsc --noEmit` failing on a clean clone; Vercel un-ignoring `.env.example`
+repeatedly; an empty trace that made replay look broken; the seatbelt that
+unbuckled itself on every resume; the model asking permission and that not
+being a safety feature; and project #2's own server locking this project out.
+
+All of them, with causes and fixes, are in [the
+compendium](/learn/picture/gotchas).

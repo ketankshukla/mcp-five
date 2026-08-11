@@ -5,12 +5,113 @@ summary: "A server advertises what it can do and then waits. Three messages are 
 project: 1
 ---
 
-## Coming in a later milestone
+An MCP server is a **vending machine**.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/server/vending-machine.mdx`.
+It stands there. It has a lit-up panel listing what is inside. It does nothing
+at all until somebody presses a button, and then it does exactly the one thing
+that button does and goes back to standing there.
 
-### What will be here
+<Callout type="lesson" title="It never initiates">
+  This is the single most important property of a server, and everything in
+  project #5 is a consequence of it being *almost* true rather than completely
+  true.
 
-A server advertises what it can do and then waits. Three messages are the whole protocol.
+  A server cannot decide to do something. It cannot start a conversation, poll
+  you, or push you a notification. It answers.
+</Callout>
+
+## Three messages are the whole protocol
+
+Not three *kinds* of message. Three messages.
+
+| Message | What it means |
+|---|---|
+| `initialize` | *"Hello. Which version of this do you speak?"* |
+| `tools/list` | *"What have you got?"* |
+| `tools/call` | *"Use that one, please, with these arguments."* |
+
+That is a complete, working MCP conversation. Everything else in the
+specification — resources, prompts, sampling, elicitation, notifications,
+progress — is a refinement of those three moves.
+
+<Diagram
+  title="D3 · the handshake"
+  caption="The blue band happens once, when the client connects. The amber band is the part you actually notice. Nothing happens between them: the server is waiting, and it will wait indefinitely."
+>
+{`sequenceDiagram
+    autonumber
+    actor You as 🧑 You
+    participant AI as 🧠 Claude
+    participant SRV as 🧰 Your MCP server
+
+    rect rgba(56, 189, 248, 0.15)
+        Note over AI,SRV: Handshake — happens once, when Claude starts
+        AI->>SRV: initialize
+        SRV-->>AI: "I speak MCP 2025-06-18, I'm cookie-jar-mcp"
+        AI->>SRV: tools/list
+        SRV-->>AI: say_hello, roll_dice, cookie_jar, secret_code<br/>+ each one's description and inputs
+    end
+
+    rect rgba(251, 191, 36, 0.15)
+        Note over You,SRV: Now you actually ask for something
+        You->>AI: "roll me three twenty-sided dice"
+        Note right of AI: Reads your sentence.<br/>Matches it against the<br/>DESCRIPTIONS from step 4.
+        AI->>SRV: tools/call<br/>roll_dice { sides: 20, times: 3 }
+        Note right of SRV: YOUR JavaScript runs here.<br/>Claude never sees inside.
+        SRV-->>AI: "Rolled 3d20 -> [17, 9, 18] Total: 44"
+        AI-->>You: "You rolled 17, 9 and 18 — 44 total!"
+    end`}
+</Diagram>
+
+Look at step 6, and then look at what is *not* there. Nothing in the server
+connected the words *"three twenty-sided dice"* to `{ sides: 20, times: 3 }`.
+The server never saw your sentence. It received arguments and ran a function.
+
+The matching happened at step 5, in the model, against **the descriptions the
+server advertised at step 4**. That is why the next page is about descriptions.
+
+## The envelope is boring on purpose
+
+Every one of those messages is JSON-RPC 2.0, which is a specification you can
+learn in about a minute:
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "roll_dice", "arguments": { "sides": 20, "times": 3 } } }
+```
+
+An `id` so replies can be matched to requests. A `method`. Some `params`. That
+is the entire envelope, and you can poke a real server with it right now:
+
+```bash
+curl -X POST https://learn-mcp-5-year-old.vercel.app/api/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+<Callout type="gotcha" title="Accept must list both types">
+  `application/json` **and** `text/event-stream`. Send only the first and you
+  get a bare `406 Not Acceptable` with no explanation of what it wanted.
+
+  This is the first thing that bites everybody, and it bites again in project
+  #2 when the client is written by hand.
+</Callout>
+
+## The whole server is one file
+
+Worth saying plainly, because "build an MCP server" sounds like a project.
+
+Project #1's server — four tools, one resource, one prompt, deployed and
+reachable from Claude Desktop — is a single route handler:
+`app/api/mcp/route.ts`. There is no framework, no daemon, no long-lived
+process. It is an HTTP endpoint that receives JSON and returns JSON.
+
+<Callout type="insight" title="And that is why serverless works for servers, and breaks for hosts">
+  A vending machine has no memory of you between visits, and does not need one.
+  Request in, result out.
+
+  Hold that thought. It is exactly why project #1's cookie jar tells lies (see
+  [The sandcastle](/learn/server/the-sandcastle)), and why project #5's
+  sampling push [cannot work at all](/learn/ledger/the-finding).
+</Callout>

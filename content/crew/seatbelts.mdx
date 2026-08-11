@@ -5,12 +5,112 @@ summary: "Recursion multiplies per-loop limits. The best of the five is an absen
 project: 4
 ---
 
-## Coming in a later milestone
+Project #3 had seatbelts and they were all correct. Every one of them was
+scoped to **one loop**.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/crew/seatbelts.mdx`.
+<Callout type="quote">
+  Recursion multiplies per-loop limits instead of adding them.
+</Callout>
 
-### What will be here
+An orchestrator allowed ten iterations, that hires three workers allowed ten
+each, has quietly authorised **forty** API calls against conversations that
+keep growing. Nobody wrote that number down. It is the product of two limits
+that each looked reasonable alone.
 
-Recursion multiplies per-loop limits. The best of the five is an absence, not a counter.
+## The five
+
+| Seatbelt | Kind of limit | From | What it catches that the others don't |
+|---|---|---|---|
+| `MAX_ITERATIONS = 10` | per agent | #2 | One agent spinning. Kept at ten on purpose — raising it would have hidden the effect being measured. |
+| `MAX_CONCURRENT = 3` | rate | **new** | Three-wide is a bill times three, not times sixty. The model may ask for more; they queue. |
+| `MAX_SPAWNS = 8` | quantity | **new** | An orchestrator that wants one agent per jar, hiring sixty of them three at a time, politely, within the concurrency cap. |
+| `MAX_TREE_TOKENS` | money | **new** | The only check that sees the whole bill. Shared **by reference**; workers spend from the boss's wallet. |
+| **no `spawn_agent` for workers** | structural | **new** | Infinite recursion. |
+
+Five, because they catch five genuinely different failures. Note that the
+second and third look similar and are not: `MAX_CONCURRENT` bounds how many run
+*at once*, `MAX_SPAWNS` bounds how many run *at all*. An orchestrator can
+respect a concurrency cap perfectly while hiring sixty workers in sequence.
+
+<Callout type="insight" title="MAX_ITERATIONS was deliberately not raised">
+  The obvious response to "the single agent hit the iteration cap at 240 jars"
+  is to raise the cap.
+
+  It was left at ten, because raising it would have **hidden the effect being
+  measured**. The point of the experiment was to find where a single context
+  window stops working, and moving the ceiling every time you touch it means
+  you never find out where it is.
+</Callout>
+
+## The one worth stealing
+
+That last row.
+
+There is **no depth counter** in this codebase. A sub-agent is started with
+`delegate: false`, so `spawn_agent` is **not in its tool list at all**.
+
+```ts
+runAgentLoop({
+  messages: [{ role: "user", content: briefing(task) }],
+  toolbox: context.toolbox,
+  gate: true,
+  delegate: false,          // ← cooks don't hire cooks
+  budget: context.budget,
+})
+```
+
+It cannot recurse for the same reason you cannot dial a phone number that was
+never printed.
+
+<Callout type="quote">
+  Prefer a design where the bad thing is unreachable over a check that catches
+  it.
+</Callout>
+
+<Callout type="lesson" title="A counter can be off by one. An absence cannot.">
+  Think about what a depth counter would have to survive: being incremented in
+  the right place, being passed down through every call site, being persisted
+  across a pause, and being restored correctly on resume.
+
+  That last one is not hypothetical. [Project #3's `iterationOffset`
+  bug](/learn/gate/pausing-is-an-array) and [project #4's own spawn cap
+  resetting on every resume](/learn/crew/build-it-4) are both exactly that
+  failure — a counter that silently re-scoped itself when the operation was
+  split across HTTP requests.
+
+  The tool list has no such problem. There is nothing to carry across the
+  boundary, because there is nothing there.
+</Callout>
+
+## What it costs
+
+Honesty about the tradeoff, because this design is not free.
+
+**Two levels is a deliberate structural choice, not a limitation you can lift
+by changing a constant.** Three levels needs a real depth counter, and at that
+point everything above gets harder: the counter has to survive pauses, the
+budget has to be attributed further down the tree, and the approval card has to
+explain a path rather than a parent.
+
+So the design is honest about what it is: a two-level tree, enforced by
+construction, with the escape hatch clearly signposted as a bigger piece of
+work rather than a config change.
+
+## One wallet, shared by reference
+
+`MAX_TREE_TOKENS` deserves its own note, because it is the only seatbelt that
+is not per-agent.
+
+It is a single `TreeBudget` object passed down into every worker **by
+reference**, so that the sentence *"the whole run stops at 600,000 tokens"* is
+**true** rather than approximately true.
+
+<Callout type="warning" title="And project #5 immediately found the hole in it">
+  Every seatbelt here guards spenders **inside your own tree**. Then MCP's
+  `sampling` capability turns up and a *server* can ask your host to run a
+  model call, on your key.
+
+  Your `MAX_TREE_TOKENS` now guards everything except the one spender you don't
+  control. The fix is one line — `options.budget.add(usage)` — and the reasoning
+  is on [One wallet, many spenders](/learn/ledger/one-wallet).
+</Callout>

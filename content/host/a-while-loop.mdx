@@ -5,12 +5,126 @@ summary: "Send, reply, run, paste, repeat. There was never anything else in the 
 project: 2
 ---
 
-## Coming in a later milestone
+Think back to what happened when you said *"roll me three twenty-sided dice"*.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/host/a-while-loop.mdx`.
+Your server rolled the dice. **That is all it did.** Something else read your
+sentence, realised a tool was needed, picked the right one out of four,
+invented the arguments, made the call, read the result, and turned it into a
+friendly sentence.
 
-### What will be here
+That something else is called a **host**, and it did all the interesting work.
 
-Send, reply, run, paste, repeat. There was never anything else in the box.
+## Four steps
+
+"AI agent" sounds like a thing you buy. It isn't. It is four steps you write
+yourself.
+
+| # | What happens |
+|---|---|
+| 1 | Send the conversation to the model, along with the list of tools. |
+| 2 | The model replies. Its reply either **is** the answer, or it is a **request**: *"please run `roll_dice` with these arguments."* |
+| 3 | If it's a request: run the tool, paste the result into the conversation **as if the user had said it**, and **go back to step 1**. |
+| 4 | Otherwise, you're done. |
+
+<Callout type="quote">
+  There was never anything else in the box.
+</Callout>
+
+<Diagram
+  title="D4 · the agent loop"
+  caption="The whole pattern. The amber box is where the magic lives — pasting tool results back into the conversation and asking again. Everything else is bookkeeping, and the edge back to the API call is the only thing that makes this an agent rather than a function call."
+>
+{`flowchart TB
+    START(["🧑 user message"]) --> BUILD["📋 messages = [ user message ]"]
+    BUILD --> CALL["🧠 send messages + tools<br/>to the Claude API"]
+    CALL --> APPEND["📝 append the WHOLE reply<br/>to messages"]
+    APPEND --> CHECK{"stop_reason ?"}
+
+    CHECK -->|"end_turn"| DONE(["✅ that's the answer"])
+    CHECK -->|"max_tokens"| TRUNC(["✂️ cut off — raise max_tokens"])
+    CHECK -->|"tool_use"| CAP{"iteration < 10 ?"}
+
+    CAP -->|"no"| STOP(["🛑 seatbelt — stop spending"])
+    CAP -->|"yes"| RUN["🧰 run every requested tool<br/><i>in parallel</i>"]
+
+    RUN --> PASTE["📝 append ALL results as<br/>ONE user message"]
+    PASTE --> CALL
+
+    style START fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style CALL fill:#2e1065,stroke:#a78bfa,color:#ede9fe
+    style RUN fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style PASTE fill:#78350f,stroke:#fbbf24,stroke-width:3px,color:#fef3c7
+    style DONE fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style STOP fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style TRUNC fill:#450a0a,stroke:#ef4444,color:#fecaca`}
+</Diagram>
+
+## The demo that proves it
+
+One sentence, chosen because it **cannot be faked**:
+
+<Callout type="quote">
+  Roll 3d20, then put that many cookies in the jar.
+</Callout>
+
+The second half depends on the first half. The model cannot fill in `count`
+until it has seen the dice total — and the dice total does not exist until a
+real server on the real internet has rolled real random numbers.
+
+Here is what actually happened:
+
+<Terminal title="npm run agent">
+{`--- iteration 1 --------------------------------------------------
+  -> CALL cookiejar__roll_dice  {"sides":20,"times":3}
+  <- RESULT Rolled 3d20 -> [10, 4, 16]  Total: 30  (265ms)
+
+--- iteration 2 --------------------------------------------------
+  The rolls were 10, 4, and 16 — a total of 30. Now I'll add 30 cookies to the jar.
+  -> CALL cookiejar__cookie_jar  {"action":"add","count":30}
+  <- RESULT Added 30. The jar now has 42 cookie(s).  (275ms)
+
+--- iteration 3 --------------------------------------------------
+  Done! 🎲 I rolled 3d20 and got 10, 4, 16 for a total of 30.
+  I added 30 cookies to the jar, which now has 42 cookies in it.
+
+done — end_turn
+  3 iteration(s), 2 tool call(s), 697 uncached in / 287 out
+  cache: 2281 written, 4562 read at ~10% price`}
+</Terminal>
+
+**Look at iteration 2.** `count: 30`.
+
+<Callout type="lesson" title="Nothing in the repo knows that dice have anything to do with cookies">
+  There is no `if (rolledDice) thenAddCookies()`. There is no plan, no
+  workflow, no graph.
+
+  The number moved from the first tool's output into the second tool's input
+  because the loop **pasted it into the conversation and asked again** — and
+  the model read it the way it reads anything else.
+</Callout>
+
+That is what makes an agent an agent. You genuinely cannot feel it until you
+have watched your own loop do it.
+
+## Server, client, host
+
+Worth nailing down now, because the rest of the course leans on the
+distinction.
+
+| | Talks to | Owns |
+|---|---|---|
+| **server** | whoever calls it | its own tools and data |
+| **client** | exactly one server | the transport |
+| **host** | the model, and *several* clients | the conversation, the loop, the money |
+
+Every AI product you admire — Claude Code, Cursor, ChatGPT with plugins — is a
+variation on that third row.
+
+<Callout type="insight" title="And notice where the security boundary lands">
+  The host is the only component that talks to the model, holds the API key,
+  and decides which tools are even offered.
+
+  Servers propose. **The host disposes.** That sentence is the seed of projects
+  #3, #4 and #5 — it just takes three more projects to notice all its
+  consequences.
+</Callout>

@@ -5,12 +5,171 @@ summary: "The flag arrives over HTTP from a machine you don't control. Consult i
 project: 3
 ---
 
-## Coming in a later milestone
+This is the one idea to take away from project #3, and arguably from the whole
+course. If you remember nothing else, remember this page.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/gate/hint-not-permission.mdx`.
+## The problem, stated exactly
 
-### What will be here
+Project #2's loop is genuinely good. It reads your sentence, picks tools across
+several servers, runs them, feeds the results back, and loops until it has an
+answer.
 
-The flag arrives over HTTP from a machine you don't control. Consult it and your gate is optional.
+Now imagine connecting one more server — one with a `delete_file` tool.
+
+<Diagram
+  caption="There is no gap between the model choosing and the tool running. Nowhere for a human to stand, and nowhere to even take notes."
+>
+{`flowchart LR
+    U["🧑 'clean up the old build files'"] --> M["🧠 model picks<br/>delete_file"]
+    M --> R["▶️ it runs.<br/><b>immediately.</b>"]
+    R --> GONE["💥 files gone"]
+    GONE --> Q["😰 which files?<br/>why those?<br/>can I see what happened?"]
+    Q --> NO["❌ no record.<br/>refresh = forgotten."]
+
+    style U fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style R fill:#7f1d1d,stroke:#ef4444,stroke-width:3px,color:#fecaca
+    style GONE fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style NO fill:#450a0a,stroke:#ef4444,color:#fecaca`}
+</Diagram>
+
+<Callout type="quote">
+  "The model picked a tool" and "the tool ran" are the same instant.
+</Callout>
+
+## The tempting fix, and why it is a disaster
+
+MCP lets a server describe its own tools as dangerous:
+
+```ts
+server.registerTool("smash_jar", {
+  description: "PERMANENTLY destroy the cookie jar...",
+  annotations: { destructiveHint: true },   // <- right here
+}, handler);
+```
+
+That is real, it is in the spec, and project #3 **sets it honestly** on its own
+destructive tool. Go and look: `app/api/jar/route.ts`.
+
+And then the host **never reads it.** Not as a hint. Not as a default. Not as a
+tiebreaker.
+
+<Diagram
+  caption="The flag is set by whoever wrote the server. If your gate consults it, the decision about whether to ask a human has been delegated to the party the human is being protected from."
+>
+{`flowchart TB
+    subgraph BAD["❌ trusting the server's own flag"]
+        direction TB
+        B1["🧰 a server you don't control"]
+        B2["sets destructiveHint: false<br/><i>on a tool that deletes everything</i>"]
+        B3["🎛️ host: 'not flagged dangerous,<br/>so I won't ask'"]
+        B4["💥 it runs"]
+        B1 --> B2 --> B3 --> B4
+    end
+
+    subgraph GOOD["✅ a list the host owns"]
+        direction TB
+        G1["🧰 server says whatever it likes"]
+        G2["🎛️ host checks ITS OWN list<br/><i>lib/approval.ts</i>"]
+        G3["⏸️ on the list -> ask a human"]
+        G1 --> G2 --> G3
+    end
+
+    style BAD fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style GOOD fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style B4 fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fecaca
+    style G3 fill:#14532d,stroke:#4ade80,stroke-width:2px,color:#dcfce7`}
+</Diagram>
+
+<Callout type="lesson" title="If your gate consults that flag, then any server that wants to bypass your gate bypasses your gate">
+  It just ships `destructiveHint: false`.
+
+  You would have built a lock and handed the key to the person standing outside
+  the door.
+</Callout>
+
+## Every softer version dies the same way
+
+This is the part worth internalising, because the strong form of the rule is
+easy to accept and the weak forms are the ones you will actually be tempted by.
+
+| "But what if I…" | Why it still fails |
+|---|---|
+| …only trust it for servers on my allowlist? | Then you're trusting the **server**, not the flag. The flag adds nothing and can only weaken you. |
+| …use it as a default and override per-tool? | A server can still opt a **new** tool out of your gate by shipping it unflagged. |
+| …warn when the hint disagrees with my list? | Fine as telemetry. Never as an input to the decision. |
+
+Notice the shape they share. Each one tries to keep *some* signal from the
+flag, and in each case the signal is only ever able to make your gate **more
+permissive** than your own list would have been. A control that can only be
+loosened by an untrusted party is not a control.
+
+<Callout type="quote">
+  A hint from the other side of a network boundary is not a permission model.
+</Callout>
+
+## What the host does instead
+
+An explicit list, on the host side, written by you.
+
+```ts title="lib/approval.ts"
+const RULES: Rule[] = [
+  {
+    tool: "cookiejar__smash_jar",
+    when: "always",
+    matches: () => true,
+    reason:
+      "smash_jar permanently deletes every cookie AND erases the jar's entire history. There is no undo and no backup.",
+  },
+  {
+    tool: "cookiejar__cookie_jar",
+    when: 'action is "eat"',
+    matches: (args) => args.action === "eat",
+    reason:
+      "Eating removes cookies from the jar. Cookies cannot be un-eaten, so a human should see the number first.",
+  },
+];
+```
+
+Thirty lines of actual logic, and it is the most important file in the project.
+
+Two details in there worth copying:
+
+**Every rule carries a `reason`.** It is shown to the human in the approval
+card, so the pause never feels arbitrary. *"Why am I being asked?"* should
+always have an answer.
+
+**A rule that crashes fails closed.**
+
+```ts
+try {
+  hit = rule.matches(safeArgs);
+} catch {
+  // If we cannot tell whether this call is dangerous, that is exactly
+  // when to ask a human.
+  return { decision: "ask", reason: `Could not evaluate the safety rule for ${toolName}…` };
+}
+```
+
+`args` is whatever the model produced. It is untrusted, possibly malformed, and
+typed as `unknown` on purpose. A rule that assumes a shape and gets something
+else must not throw and take the whole run with it — and must not silently
+allow, either.
+
+## And the model asking nicely is not a safety feature
+
+One more thing, because it is genuinely misleading the first time you see it.
+
+Ask the agent to *"smash the jar"* and the model will often stop and ask you
+itself, because the tool's description says it is irreversible. That is good
+behaviour.
+
+<Callout type="warning" title="It is not a guarantee">
+  It is a **disposition**. It varies run to run, and it evaporates the moment a
+  user says *"yes, I'm sure, no questions."*
+
+  Which was tested. **The model complied. The host stopped it anyway.**
+
+  The gate is the part that is a guarantee. The model's politeness is a nice
+  extra you must never depend on — and depending on it is easy, because for the
+  first fifty runs it looks exactly like a working safety system.
+</Callout>

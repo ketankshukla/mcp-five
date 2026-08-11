@@ -5,12 +5,133 @@ summary: "Namespacing, Promise.allSettled, and the mildest version of the whole 
 project: 2
 ---
 
-## Coming in a later milestone
+A client talks to one server. A **host** juggles a shelf of them — and the
+moment you have two, you have a problem.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/host/the-toolbox.mdx`.
+Project #2 connects to two servers, and both of them have a tool called
+`secret_code`. The collision is deliberate: the cookie-jar server does a Caesar
+shift, the toolbox server does Atbash.
 
-### What will be here
+The Claude API sees **one flat list of tool names.** So without help, one
+silently shadows the other and you get baffling results with no error anywhere.
 
-Namespacing, Promise.allSettled, and the mildest version of the whole series' idea: a host curates.
+## Rewrite every name on the way out
+
+<Diagram
+  caption="Namespace on the way out, un-namespace on the way back. The model then picks deliberately between two tools that would otherwise have been the same name."
+>
+{`flowchart TB
+    subgraph BEFORE["❌ flat names — one silently wins"]
+        direction TB
+        A1["🍪 cookie-jar<br/>secret_code"] --> COLLIDE["🧠 model sees<br/><code>secret_code</code>"]
+        A2["🧰 toolbox<br/>secret_code"] --> COLLIDE
+        COLLIDE --> WAT["😕 which one ran?"]
+    end
+
+    subgraph AFTER["✅ namespaced — both survive"]
+        direction TB
+        B1["🍪 cookie-jar<br/>secret_code"] --> N1["<code>cookiejar__secret_code</code>"]
+        B2["🧰 toolbox<br/>secret_code"] --> N2["<code>toolbox__secret_code</code>"]
+        N1 --> PICK["🧠 model picks deliberately"]
+        N2 --> PICK
+    end
+
+    style BEFORE fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style AFTER fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style WAT fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+    style PICK fill:#14532d,stroke:#4ade80,color:#dcfce7`}
+</Diagram>
+
+Double underscore, because Claude tool names must match
+`^[a-zA-Z0-9_-]{1,128}$` — no dots, no slashes, no colons.
+
+<Callout type="gotcha" title="Split the name back apart with indexOf, not split">
+  A tool could legitimately be called `do__thing`, and only the **first**
+  separator is yours.
+
+  ```ts
+  const i = full.indexOf("__");
+  const server = full.slice(0, i);
+  const tool = full.slice(i + 2);
+  ```
+
+  `split("__")` gives you three pieces and a bug that appears the first time
+  somebody else names a tool the way you didn't expect.
+</Callout>
+
+## One sleeping server must not kill the host
+
+The other thing that changes the moment there are two servers: **one of them
+will be down.**
+
+```ts
+const results = await Promise.allSettled(servers.map(connect));
+```
+
+`Promise.all` gives you a toolbox that fails entirely if any single server is
+unreachable. `Promise.allSettled` gives you a toolbox with fewer tools in it,
+and a host that still works.
+
+<Callout type="lesson" title="Your own past projects are third-party services">
+  This stopped being theoretical almost immediately. Before designing project
+  #4's toolbox, all three previous projects were curled:
+
+  <Terminal>
+  {`https://learn-mcp-5-year-old.vercel.app/api/mcp        -> 200   open
+https://learn-mcp-agent-loop.vercel.app/api/toolbox    -> 401   locked
+https://learn-mcp-agent-guard.vercel.app/api/jar       -> 401   locked`}
+  </Terminal>
+
+  Two of three locked, by their own authors, working exactly as designed. Their
+  auth, uptime and rate limits constrain you exactly as a stranger's would.
+
+  `Promise.allSettled` is what keeps that a **design decision** instead of an
+  outage.
+</Callout>
+
+## A host curates
+
+Here is the part that matters more than either of the above, and it is the
+mildest version of an idea the next three projects sharpen into a thesis.
+
+The toolbox is not a dumb pipe. It does not forward whatever a server
+advertises.
+
+Project #3 connects to its own durable cookie jar **and** project #1's live
+server. Project #1 also has a `cookie_jar` — the forgetful one — and the host
+**hides it**, because two identical-looking jars would mean the model guessing
+which one you meant on every request, and sometimes guessing wrong.
+
+<Callout type="quote">
+  A host curates its toolbox. The host, not the server, decides what the model
+  can reach.
+</Callout>
+
+Note that the `secret_code` collision is deliberately *kept*, because the
+namespacing lesson is still true and there is an eval measuring whether the
+model can tell the two ciphers apart. Curating means choosing, not minimising.
+
+<Callout type="insight" title="Where this goes">
+  Right now "curating" means hiding a confusing duplicate. Three sentences
+  later in the series it means:
+
+  - refusing to read a server's own safety flag → [The
+    Gate](/learn/gate/hint-not-permission)
+  - withholding `spawn_agent` from workers so recursion is *unreachable* →
+    [Seatbelts](/learn/crew/seatbelts)
+  - overriding the model a server asked for, and clamping its `maxTokens` →
+    [What the host refuses to trust](/learn/ledger/refuses-to-trust)
+
+  Same idea, four times, getting less polite each time.
+</Callout>
+
+## Try it
+
+The collision is live in the app:
+
+<Callout type="quote">
+  Encode 'meet me at dawn' with BOTH secret_code tools and compare them.
+</Callout>
+
+Two tools, two ciphers, one flat namespace that would have made this impossible
+to ask for.

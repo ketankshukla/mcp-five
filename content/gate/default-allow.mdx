@@ -5,12 +5,109 @@ summary: "An approval gate that trains you to click Approve is worse than none, 
 project: 3
 ---
 
-## Coming in a later milestone
+Unmatched tools default to **allow**, not deny.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/gate/default-allow.mdx`.
+```ts title="lib/approval.ts"
+const DEFAULT_DECISION: GateDecision = "allow";
+```
 
-### What will be here
+That is the wrong default for production, and project #3 says so in the file
+itself rather than pretending otherwise. It is worth understanding *why* it is
+the right default here, because the reasoning is about people rather than about
+security.
 
-An approval gate that trains you to click Approve is worse than none, because it feels like one.
+## Default-deny is safer, and it has a failure mode
+
+Set that constant to `"ask"` and every unclassified tool stops and asks a
+human. Strictly safer. Nothing unexpected can happen.
+
+Now run it.
+
+<Callout type="gotcha" title="Ninety seconds">
+  A default-deny host prompts you about `roll_dice`. And `say_hello`. And
+  `jar_history`. And `secret_code`. Within about ninety seconds you have
+  click-fatigue, and you start approving without reading.
+
+  At which point you are approving `smash_jar` with the same reflex you
+  approved `say_hello`.
+</Callout>
+
+<Callout type="quote">
+  An approval gate that trains you to click Approve reflexively is worse than
+  no gate at all — because it also gives you the feeling of having one.
+</Callout>
+
+That second clause is the whole argument. A system with no gate makes you
+careful. A system with a gate you have learned to dismiss makes you careless
+*and* confident, which is strictly worse than either.
+
+## The real variable is how many prompts per hour
+
+Framed properly, this is not a security-versus-convenience trade. It is a
+question about **the quality of the attention** each prompt receives, and that
+quality collapses as frequency rises.
+
+| Prompts per session | What a human actually does |
+|---|---|
+| 1–2 | reads the arguments, thinks, decides |
+| ~10 | skims the tool name, decides on vibes |
+| 50+ | clicks Approve as a way of dismissing a dialog |
+
+So the design goal is not "stop as much as possible." It is **stop rarely
+enough that every stop gets read.**
+
+Which reframes the rule list from a denylist into a budget: you have a small
+number of interruptions to spend per session, and each rule you add spends
+some.
+
+## When you should flip it
+
+The honest answer, and it is one line either way.
+
+<Compare
+  leftLabel="Keep default-allow when…"
+  rightLabel="Flip to default-deny when…"
+  left={<><ul><li>the toolbox is small and you wrote most of it</li><li>most tools are reads</li><li>you can enumerate the dangerous ones</li><li>the blast radius of a miss is a cookie jar</li></ul></>}
+  right={<><ul><li>real money or real infrastructure</li><li>tools arrive from servers you did not write</li><li>the toolbox changes without your involvement</li><li>you cannot enumerate what is dangerous, because you do not know what will be added next</li></ul></>}
+/>
+
+That last one on the right is the real trigger, and it is worth stating
+separately.
+
+<Callout type="lesson" title="Default-allow is a bet that you know the whole toolbox">
+  It is a perfectly good bet when you do. It stops being a bet and becomes a
+  hole the moment a server can add a tool without you noticing — because a
+  brand-new tool is, by definition, unclassified, and unclassified means
+  allowed.
+
+  Notice that this is the *same* failure as trusting `destructiveHint`: in both
+  cases a party you don't control gets to add something that your gate waves
+  through. [A hint is not a permission
+  model](/learn/gate/hint-not-permission) is about them lying to you.
+  Default-allow is about them simply being new.
+</Callout>
+
+If you flip it, the work is not the one-line change. It is building the
+allowlist of *safe* tools carefully enough that the prompt rate stays under the
+threshold where people still read them.
+
+## Say the tradeoff out loud
+
+The thing project #3 actually gets right here is not the choice. It is that the
+choice is **written down, in the file, with its reasoning and its escape
+hatch.**
+
+A default buried in a config object is a decision nobody made. A default with
+forty lines of comment above it explaining what it costs and when to change it
+is a decision somebody can revisit — including you, in six months, having
+forgotten every part of this.
+
+<Callout type="insight" title="And the same trap shows up again, one project later">
+  Project #5's spend gate could have stopped on *every* sampling request rather
+  than gating on price. That is default-deny wearing a new hat: you would
+  approve nine trivial 0.2¢ summaries a day, and then approve the 6¢ one by
+  reflex, **because approving is what the button is for.**
+
+  Same failure mode, different resource. See [A budget is not a
+  gate](/learn/ledger/budget-not-gate).
+</Callout>

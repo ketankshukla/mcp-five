@@ -5,12 +5,124 @@ summary: "`cookie_jar` isn't dangerous. `cookie_jar { action: \"eat\" }` is. The
 project: 3
 ---
 
-## Coming in a later milestone
+`cookie_jar` is not a dangerous tool.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/gate/rules-read-arguments.mdx`.
+`cookie_jar { action: "eat" }` is.
 
-### What will be here
+Same tool. Same name. Same server. One of them reads a number; the other
+destroys something that cannot be un-destroyed.
 
-`cookie_jar` isn't dangerous. `cookie_jar { action: \"eat\" }` is. The verb lives in the arguments.
+## A name-only gate forces a bad choice
+
+If your rules key on tool names, you have exactly two options for `cookie_jar`,
+and both are wrong:
+
+<Compare
+  leftLabel="Gate the name"
+  rightLabel="Don't gate the name"
+  left={<><p>The agent stops and asks before it can even <strong>look</strong> in the jar.</p><p>You are now clicking Approve on <code>action: &quot;look&quot;</code> several times a minute, which is how click-fatigue starts.</p></>}
+  right={<><p>The agent empties the jar without asking.</p><p>Which is the exact thing the gate exists to prevent.</p></>}
+/>
+
+Neither is acceptable, and the reason is not that the cookie jar is badly
+designed. **Real tools are shaped exactly the same way.**
+
+| Tool | Fine | Not fine |
+|---|---|---|
+| `sql` | `SELECT` | `DROP TABLE` |
+| `github` | reading an issue | force-pushing to main |
+| `stripe` | fetching a customer | issuing a refund |
+| `shell` | `ls` | `rm -rf` |
+
+In every one of those, the verb lives in the **arguments**. The tool name is a
+namespace, not a permission.
+
+<Callout type="quote">
+  The verb lives in the arguments, so the gate has to read them.
+</Callout>
+
+## So a rule is a predicate
+
+```ts title="lib/approval.ts"
+{
+  tool: "cookiejar__cookie_jar",
+  when: 'action is "eat"',
+  matches: (args) => args.action === "eat",
+  reason:
+    "Eating removes cookies from the jar. Cookies cannot be un-eaten, so a human should see the number first.",
+}
+```
+
+Four fields, and each one is pulling its weight:
+
+| Field | Job |
+|---|---|
+| `tool` | the namespaced name the model sees — `cookiejar__cookie_jar` |
+| `when` | plain English, for the docs and the UI. Not used in the decision. |
+| `matches` | the actual predicate, over the model's arguments |
+| `reason` | shown to the human when it fires |
+
+`when` is worth noticing. It exists purely so the rule table can be *printed* —
+in the checkpoint script, and in the browser — without anybody reading
+JavaScript to find out what the gate does.
+
+<Callout type="lesson" title="A security control nobody can read is a security control nobody audits">
+  ```bash
+  npm run mcp:translate
+  ```
+
+  ends with the rules table and a per-tool verdict. You can see, before running
+  anything, exactly which calls would stop.
+</Callout>
+
+## What is deliberately *not* on the list
+
+Just as instructive as what is:
+
+```text
+cookiejar__jar_history      reading is free
+legacy__roll_dice           nothing it does is hard to undo
+legacy__say_hello           ditto
+cookiejar__secret_code      ditto
+toolbox__secret_code        ditto
+```
+
+Nothing they do is hard to undo, so stopping to ask would be pure friction —
+and friction is not free, it is the thing that makes people stop reading the
+cards.
+
+## Three rules, three different shapes
+
+Project #3's whole list is three entries, and they are deliberately not all the
+same kind of predicate:
+
+| Rule | Fires when | Why |
+|---|---|---|
+| `smash_jar` | **always** | Permanently deletes every cookie *and* erases the jar's history. No undo, no backup. |
+| `cookie_jar` | `action` is `"eat"` | Cookies cannot be un-eaten. A human should see the number first. |
+| `cookie_jar` | `action` is `"refill"` | Resets the jar to exactly 12. **If the jar holds more than 12, this silently destroys the difference.** |
+
+That third one is the interesting entry. `refill` sounds constructive. It has a
+friendly name and it *adds* cookies most of the time.
+
+<Callout type="insight" title="Dangerous is not the same as negative-sounding">
+  Any operation that overwrites unbounded state with a fixed value can destroy
+  an arbitrary amount of it. `refill`, `reset`, `sync`, `restore from backup`,
+  `set quantity` — all of them read as safe and all of them can be the most
+  destructive thing in your toolbox.
+
+  A gate built by scanning tool names for scary words would have caught
+  `smash_jar` and missed this one.
+</Callout>
+
+## Where this goes next
+
+Reading arguments turns out to be necessary but not sufficient.
+
+Project #5 hits a tool where even reading the arguments does not tell you
+whether to stop, because the thing being controlled is *cost*, and cost has to
+be **computed** from the arguments rather than matched against them. The same
+`summarise_week` call is 0.22¢ or 6.0¢ depending on one string.
+
+At that point the rule stops being a predicate and becomes a number. See [A
+budget is not a gate](/learn/ledger/budget-not-gate).

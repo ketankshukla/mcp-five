@@ -5,12 +5,118 @@ summary: "MCP is JSON over HTTP. Two things bite: the Accept header, and the rep
 project: 2
 ---
 
-## Coming in a later milestone
+There is an official SDK. Project #2 does not use it for the client half, on
+purpose.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/host/client-by-hand.mdx`.
+`lib/mcp-client.ts` is about two hundred lines of `fetch`. The point of the
+series is that the protocol is just JSON, and you do not really believe that
+until you have written the thing that speaks it.
 
-### What will be here
+<Callout type="lesson" title="It also survives contact">
+  That hand-written client is inherited unchanged by projects #3 and #4, and
+  extended in project #5 to speak **both protocol eras** — something that would
+  have been a very different conversation if the transport had been somebody
+  else's abstraction.
 
-MCP is JSON over HTTP. Two things bite: the Accept header, and the reply that might be SSE.
+  Writing it yourself is not always the answer. It was here, because the thing
+  being wrapped is genuinely small and the thing you learn is the subject.
+</Callout>
+
+## Bite #1 — the Accept header
+
+```ts
+headers: {
+  "Content-Type": "application/json",
+  Accept: "application/json, text/event-stream",   // BOTH. always.
+}
+```
+
+List only `application/json` and you get a bare **`406 Not Acceptable`**. No
+body worth reading, no hint about which header it disliked, and a status code
+that suggests you asked for something unreasonable rather than that you forgot
+to mention a second content type you weren't planning to use.
+
+<Callout type="gotcha" title="It is the fastest twenty minutes you will ever lose">
+  And it bites at every level of the stack: in `curl` while poking a server, in
+  the hand-written client, and again in project #5 when the modern-era envelope
+  gets added on top.
+
+  If a brand-new MCP integration returns 406, this is it. Every time.
+</Callout>
+
+## Bite #2 — the reply might be SSE
+
+The response to a perfectly ordinary `tools/call` may come back as **plain
+JSON** or as **Server-Sent Events**, and which one you get depends on the
+server, not on you.
+
+```text
+# sometimes this
+{"jsonrpc":"2.0","id":1,"result":{...}}
+
+# and sometimes this
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{...}}
+```
+
+Both are legal. A client that assumes one gets a confusing parse error against
+a server that chose the other — and the error will be about unexpected token
+`e` in JSON, which tells you nothing about content negotiation.
+
+So the client checks the response's content type and has a small SSE reader for
+the second case. That is most of the two hundred lines.
+
+## The translation layer everybody warns you about
+
+MCP and the Claude API both describe tools with JSON Schema. They are *almost*
+the same, which is worse than being different, because the gap is invisible
+until it isn't.
+
+| MCP says | Claude API says |
+|---|---|
+| `{ name, description, inputSchema }` | `{ name, description, input_schema }` |
+| camelCase | snake_case |
+
+<Diagram
+  caption="One rename is the whole translation layer. Get it wrong and the API returns a 400 about a missing field while you stare at two schemas that look identical."
+>
+{`flowchart LR
+    MCP["📦 MCP tools/list<br/><code>inputSchema: {...}</code>"]
+    T["🔀 lib/tool-translation.ts<br/><i>rename + namespace</i>"]
+    CLAUDE["🧠 Claude API tools[]<br/><code>input_schema: {...}</code>"]
+
+    MCP --> T --> CLAUDE
+
+    style MCP fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style T fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style CLAUDE fill:#2e1065,stroke:#a78bfa,color:#ede9fe`}
+</Diagram>
+
+Two more things that file quietly handles, both of which are one-line fixes you
+would otherwise find the hard way:
+
+- **It strips `$schema`.** Noise you pay tokens for on every single request, on
+  every tool, forever.
+- **It substitutes `{type:"object", properties:{}}` for a missing schema.** A
+  no-argument tool is perfectly legal in MCP and a `400` in the Claude API.
+
+## Check the transport before you check anything else
+
+The best habit in project #2, and it costs nothing:
+
+```bash
+npm run mcp:list        # 1. can we reach the servers at all?  (no AI)
+npm run mcp:translate   # 2. do the schemas convert correctly? (no AI)
+npm run agent           # 3. does the loop chain its own output?
+```
+
+<Callout type="lesson" title="Each one proves a layer before the next is stacked on it">
+  Run them in that order and **you can never be more than one layer away from
+  the bug.**
+
+  The first two cost nothing — no model, no tokens. Which means the cheap
+  checks run first and the expensive one only runs against a stack you have
+  already proved. Every project after this one keeps the same convention, and
+  project #5 pushes it as far as it goes: [an entire regression suite that
+  costs $0.00](/learn/ledger/zero-dollar-evals).
+</Callout>

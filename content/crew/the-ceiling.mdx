@@ -5,12 +5,158 @@ summary: "240 jars, 0 of 36 found, 439k tokens. A failing agent is expensive pre
 project: 4
 ---
 
-## Coming in a later milestone
+Project #3's agent handles one cookie jar beautifully. So project #4 gave it a
+pantry: **sixty jars**, each needing its own inspection, one jar per tool call,
+each report about 250 tokens of seal state, weights, notes and movement log.
+Nine have been tampered with, and the rule for spotting one has two clauses and
+an exception.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/crew/the-ceiling.mdx`.
+At sixty jars, it just… did it. Perfectly. Four iterations, every jar
+inspected, all nine found, nothing innocent touched.
 
-### What will be here
+<Callout type="insight" title="Which was not the expected result, and that is worth saying">
+  The premise — *"sixty verbose reports is too much for one context window"* —
+  was simply **wrong**. It is about 15,000 tokens, and the model batched the
+  inspections twenty at a time.
 
-240 jars, 0 of 36 found, 439k tokens. A failing agent is expensive precisely because it fails slowly.
+  A finding that kills your premise on stage 5 is a good outcome. The honest
+  move is to stop asserting where the ceiling is and go and find it.
+</Callout>
+
+So the pantry got a dial, and it was turned up to 240.
+
+## This is what the ceiling looks like
+
+<Diagram
+  title="D6 · one agent at 240 jars"
+  caption="Not wrong. Not crashed. Not stuck. It ran out of room, and it charged full price on the way there."
+>
+{`flowchart TB
+    START(["🧑 'find every tampered jar<br/>in these 240, empty only those'"]) --> I1
+
+    subgraph ONE["🧑‍🍳 one agent, one context window"]
+        direction TB
+        I1["iteration 1<br/><i>list all 240 jars</i>"]
+        I2["iterations 2-9<br/><i>inspect ~20 jars per turn</i>"]
+        I3["iteration 10<br/><i>still inspecting…</i>"]
+        WALL["🛑 MAX_ITERATIONS<br/>180 of 240 inspected<br/><b>0 of 36 found</b><br/><b>439,000 tokens spent</b>"]
+        I1 --> I2 --> I3 --> WALL
+    end
+
+    WALL --> NOTHING["💸 nothing emptied.<br/>nothing learned.<br/>full price paid."]
+
+    style ONE fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style WALL fill:#7f1d1d,stroke:#ef4444,stroke-width:3px,color:#fecaca
+    style NOTHING fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style START fill:#1e293b,stroke:#38bdf8,color:#f8fafc`}
+</Diagram>
+
+<StatGrid>
+  <Stat value="0 of 36" label="tampered jars found" note="180 of 240 inspected" tone="danger" />
+  <Stat value="439k" label="tokens spent finding them" tone="danger" />
+  <Stat value="36 of 36" label="found by a crew, same job" tone="ok" />
+  <Stat value="248k" label="tokens the crew spent" note="correct AND ~0.56× the price" tone="ok" />
+</StatGrid>
+
+<Callout type="quote">
+  A failing agent is expensive precisely because it fails slowly.
+</Callout>
+
+## You cannot fix this with a better prompt
+
+Because it is not a prompt problem. It is a **shape** problem.
+
+And the mechanism is not the one people usually reach for. It is not that the
+task is too hard, or that the model gets confused, or that 240 is too many
+things to hold in mind.
+
+<Callout type="lesson" title="The single agent fails expensively because it re-sends everything it has read on every iteration">
+  All 240 inspection reports ride along in the conversation, growing every trip
+  around the loop.
+
+  Its **cost grows with the square of the job while its capacity stays fixed.**
+  It runs out of iterations long before it runs out of things to inspect, and
+  it has paid full price for every re-read along the way.
+
+  This is [The meter](/learn/host/the-meter)'s superlinear-cost observation,
+  arriving with a bill attached.
+</Callout>
+
+## The kitchen
+
+A head chef does not cook faster. They do something different: split the work,
+hand pieces to other cooks, and keep only the **plan** in their own head
+instead of every detail. The details live with whoever is doing that piece.
+
+<Diagram
+  caption="Three workers each carry 80 reports and finish. The orchestrator only ever sees three paragraphs — and it brings all 36 destructive calls to a single approval."
+>
+{`flowchart TB
+    subgraph MANY["👨‍🍳 the same job, with a crew"]
+        direction TB
+        BOSS["🧠 orchestrator<br/><i>holds the PLAN,<br/>not the details</i>"]
+        BOSS --> W1["👩‍🍳 jars 1-80"]
+        BOSS --> W2["👨‍🍳 jars 81-160"]
+        BOSS --> W3["🧑‍🍳 jars 161-240"]
+        W1 --> R["📋 three short reports<br/><i>conclusions, not transcripts</i>"]
+        W2 --> R
+        W3 --> R
+        R --> BOSS
+        BOSS --> ASK["⏸ ONE approval,<br/>36 jars listed"]
+    end
+
+    ASK --> WIN["✅ 36 of 36 found<br/>248,000 tokens<br/><i>cheaper than failing</i>"]
+
+    style MANY fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style BOSS fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style ASK fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fecaca
+    style WIN fill:#052e16,stroke:#4ade80,stroke-width:2px,color:#dcfce7`}
+</Diagram>
+
+<Callout type="insight" title="And the reason the crew gets further is structural, not motivational">
+  It is not that three agents are somehow smarter.
+
+  **Each worker gets its own fresh context and its own fresh ten-iteration
+  budget.** Three workers with ten iterations each is thirty iterations of
+  capacity where one agent had ten — and none of them is carrying the other
+  two's jar reports around.
+</Callout>
+
+## How solid are these numbers?
+
+Stated plainly, because the honest version of this table is more useful than
+the tidy one.
+
+| Row | Confidence |
+|---|---|
+| **60 jars, accuracy** | Solid. Three attempts per case, both modes, 100% in both — 6/6 one agent, 12/12 crew. |
+| **60 jars, cost** | The softest number here. Two attempts of the one case both modes run identically; the run-to-run spread (85k–99k single, 74k–83k crew) is a meaningful fraction of the gap. **"A wash"** is as strong a claim as the data supports. |
+| **240 jars** | A single attempt per mode, plus a standalone probe that independently agreed. The direction is not in doubt — one mode finished and the other emptied nothing — but treat the magnitudes as one significant figure. |
+
+The compare run and the standalone probe give slightly different totals
+(440,517 / 245,948 versus 439k / 248k). Both are real; they are different runs.
+This site quotes the probe figures because those are the ones the source
+README's headline table uses.
+
+<Callout type="warning" title="And the first version of this comparison was wrong">
+  It said the crew cost **1.7×** at 60 jars and concluded "delegation is pure
+  overhead." Every individual number in that report was accurate. The division
+  was the lie.
+
+  That story is [The measurement trap](/learn/crew/measurement-trap), and it is
+  the most useful page in this section.
+</Callout>
+
+## The crossover is a property of your job
+
+Not of agents in general. It depends on how big each tool result is, how many
+calls the job needs, and how tight your iteration cap is.
+
+So the useful skill is not *"know that delegation is good."* It is **knowing
+how to find your own crossover** — which is a script you can run, not an
+opinion you can hold:
+
+```bash
+npm run compare -- --attempts 5
+PANTRY_JARS=240 npm run compare
+```

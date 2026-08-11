@@ -5,12 +5,204 @@ summary: "Twelve stages, their checkpoints, and the queue you cannot yield from 
 project: 4
 ---
 
-## Coming in a later milestone
+Project #4 copies [project #3](/learn/gate/hint-not-permission)'s `lib/`
+wholesale — the loop, the gate, the notebook, the report card — and makes the
+loop recursive.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/crew/build-it-4.mdx`.
+<Steps>
+  <Step n={0} title="Five minutes that save you a day">
+    Curl every server you intend to use, before designing anything around
+    them.
 
-### What will be here
+    <Terminal>
+    {`https://learn-mcp-5-year-old.vercel.app/api/mcp        -> 200   open
+https://learn-mcp-agent-loop.vercel.app/api/toolbox    -> 401   locked
+https://learn-mcp-agent-guard.vercel.app/api/jar       -> 401   locked`}
+    </Terminal>
 
-Twelve stages, their checkpoints, and the queue you cannot yield from inside a callback.
+    Two of three locked, by their own author, working exactly as designed.
+
+    <Callout type="lesson" title="Your own past projects are third-party services">
+      Their auth, uptime and rate limits constrain you exactly as a stranger's
+      would. **This had bitten three projects in a row** — project #3
+      discovered it *mid-build*, having already architected around a server it
+      could not reach.
+
+      So project #4's servers ship **unlocked, on purpose**. A deliberate
+      reversal, not an oversight: a fresh clone works with zero setup, and
+      `MCP_SHARED_TOKEN` still locks them if you set it. The mechanism is
+      intact; the default is flipped. Project #5 got three reachable servers
+      for free as a direct result.
+    </Callout>
+  </Step>
+
+  <Step n="1–2" title="Scaffold, inherit, and read the types">
+    Same scaffolding gotcha, fourth time. Then read what is actually installed
+    before writing against it.
+  </Step>
+
+  <Step n={3} title="The database, and the tree">
+    One nullable self-reference — `runs.parent_run_id` — turns a flat list of
+    runs into a tree, and [nested replay comes almost
+    free](/learn/gate/replay).
+
+    <Callout type="gotcha" title="`create table if not exists` will not add your new columns">
+      Project #3's lesson, still true, and it fails silently. Pair every new
+      column with `alter table … add column if not exists`.
+    </Callout>
+  </Step>
+
+  <Step n={4} title="The pantry: a job too big for one agent">
+    Sixty jars, one per tool call, ~250 tokens of report each. Nine tampered,
+    and a rule with two clauses and an exception.
+
+    <Callout type="gotcha" title="Three places have to agree about the pantry size">
+      ```bash
+      PANTRY_JARS=240 npm run db:init
+      PANTRY_JARS=240 npm run dev       # ⚠️ the MCP server builds its schema at STARTUP
+      PANTRY_JARS=240 npm run compare
+      ```
+
+      The MCP server builds its input schema **at startup**, so a dev server
+      launched without the variable advertises a tool that rejects jar 61 —
+      while the database happily contains 240 of them.
+    </Callout>
+  </Step>
+
+  <Step n={5} title="Measure the ceiling BEFORE you fix it">
+    **Do not skip this and do not do it later.** If you cannot show the
+    failure, you cannot show the fix — and you might not have one.
+
+    <Checkpoint>
+      At 60 jars the single agent aced it, and the crew cost about the same.
+      **That is a result, not a setback** — the premise was wrong, and finding
+      that out on stage 5 is the cheapest place to find it.
+
+      At 240 jars, there is the ceiling: `0 of 36 found · 440,517 tokens ·
+      stopped at MAX_ITERATIONS, 180/240 inspected`, against the crew's `36 of
+      36 · 245,948 tokens · ONE approval`.
+    </Checkpoint>
+  </Step>
+
+  <Step n={6} title="Local tools, and the event queue">
+    The fiddliest twenty lines in the repo — see [Local
+    tools](/learn/crew/local-tools).
+
+    <Callout type="gotcha" title="You cannot yield from inside a callback">
+      An async generator cannot `yield` while parked on an await, and cannot
+      yield from a callback at all. Do the obvious thing and the UI shows
+      nothing for forty seconds and then everything at once.
+
+      A buffer plus a doorbell fixes it — and note `queue.close()` wired to
+      **both** the resolve and reject paths, or one throwing worker hangs the
+      generator forever.
+    </Callout>
+
+    <Checkpoint>
+      Three lanes update **while** the workers are working, not in a lump at
+      the end.
+    </Checkpoint>
+  </Step>
+
+  <Step n={7} title="spawn_agent">
+    Multi-agent orchestration, in full, is about eight lines. The care around
+    it is [five seatbelts](/learn/crew/seatbelts).
+
+    <Checkpoint>
+      ```bash
+      npm run crew -- --boss
+      ```
+    </Checkpoint>
+  </Step>
+
+  <Step n={8} title="The bubble: five agents, one human">
+    The hard part. `origin`, `partial_results`, `paused_children` — see [Five
+    agents, one human](/learn/crew/five-agents-one-human).
+
+    <Callout type="gotcha" title="The spawn cap that reset on every resume">
+      Exactly [project #3's `iterationOffset`
+      bug](/learn/gate/pausing-is-an-array) in a new costume: a counter that
+      silently re-scoped itself from "per run" to "per request" the moment the
+      operation was split across HTTP requests.
+
+      **Re-scope every counter when you split an operation across requests.**
+      This is now the second time; it will not be the last.
+    </Callout>
+  </Step>
+
+  <Step n={9} title="One drive-and-persist path">
+    `lib/run-driver.ts` — the *one* place a run is driven and written down.
+
+    Two code paths reaching the same feature **will** drift. A sub-agent gets a
+    real row in `runs` through the same function the orchestrator does, which
+    is why nested replay needed no new machinery.
+  </Step>
+
+  <Step n={10} title="The comparison that decides the project">
+    ```bash
+    npm run compare -- --attempts 5
+    ```
+
+    And the trap it walked into first is [The measurement
+    trap](/learn/crew/measurement-trap) — the one gotcha here worth reading
+    even if you never build any of this.
+  </Step>
+
+  <Step n="11–12" title="The UI, then verify and ship">
+    Lanes, meters, and one card. Then typecheck, lint, build, and exercise the
+    real feature on the deployed URL.
+  </Step>
+</Steps>
+
+## Run it yourself
+
+```bash
+npm run mcp:list         # transport — 3 servers, 11 tools, no AI
+npm run mcp:translate    # schemas + the gate's rules, no AI
+npm run agent            # the loop, one agent
+npm run approval         # THE GATE — approve and deny
+npm run evals            # project #3's six cases, as a regression net
+npm run crew             # THE CREW — workers hit the gate, the pause bubbles up
+npm run compare          # delegate off vs on: pass rate AND token cost
+npm run replay           # rewind, including into each sub-agent
+```
+
+The interesting ones:
+
+```bash
+npm run crew -- --deny-all      # say no to everything, watch them adapt
+npm run crew -- --single        # same job, one agent, no delegation
+npm run compare -- --attempts 5 # tighten the numbers
+```
+
+## And the regression net still passed
+
+A regression in project #3's suite would have mattered more than any of this
+working:
+
+<Terminal>
+{`  look-only  chain-dice-to-cookies  no-tools  gate-fires  picks-right-cipher  reads-history
+  SCORE: 100%   (18/18)`}
+</Terminal>
+
+Six cases, three attempts each, unchanged from project #3 — despite a third MCP
+server, four new tools, a recursive loop and a rewritten persistence path.
+
+<Callout type="insight" title="That is what the report card was for">
+  It was built one project earlier, for a different reason, and its real payoff
+  arrives here: permission to make a large structural change and *know* you did
+  not break the behaviour underneath it.
+</Callout>
+
+## The ten gotchas
+
+Project #4's appendix is the longest of the first four. The three called out
+above — the event queue, the pantry size, the spawn cap — plus the premise
+being wrong and the eval saying so, a backtick inside a template literal in
+SQL, a regex that assumed the data would never grow, `create table if not
+exists`, a Next.js route module being a bad place for helpers, [the measurement
+trap](/learn/crew/measurement-trap), and `git check-ignore -v` still lying
+about negations.
+
+All of them, with causes and fixes, are in [the
+compendium](/learn/picture/gotchas).

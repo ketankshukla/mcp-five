@@ -5,12 +5,106 @@ summary: "`spawn_agent` can't live on a server — and the reason why is a secur
 project: 4
 ---
 
-## Coming in a later milestone
+Every tool in projects #1 through #3 lived on an MCP server at the end of an
+HTTP connection. That uniformity was quietly load-bearing: the host could treat
+"run a tool" as "make a request."
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/crew/local-tools.mdx`.
+`spawn_agent` breaks it.
 
-### What will be here
+It has to call back into **this** loop, holding **this** run's budget and
+identity, emitting into **this** run's trace. None of that survives a trip over
+the wire — you cannot serialise a `TreeBudget` that three other agents are
+concurrently drawing from and expect the arithmetic to still be true.
 
-`spawn_agent` can't live on a server — and the reason why is a security boundary.
+So the loop learns about **local tools**: tools the host implements itself.
+
+## And that is a security boundary
+
+The distinction is worth keeping sharp, because it is not just about where the
+code runs.
+
+| | an MCP tool | a local tool |
+|---|---|---|
+| runs | on a machine you don't control | **inside your host** |
+| privileges | whatever that server has | **whatever your host has** |
+| how many in project #4 | 11 | 1 |
+
+<Callout type="lesson" title="A local tool runs with your host's privileges">
+  Your host holds the API key, the database credential, the shared MCP token,
+  and the loop's own control flow. An MCP tool has none of those and can only
+  ask.
+
+  So the bar for adding a local tool is much higher than for adding a server
+  tool, and the count is worth keeping visible. **Eleven and one** is a healthy
+  ratio. Eleven and eleven would be a host that has quietly become an
+  unsandboxed plugin system.
+</Callout>
+
+Project #4 has exactly one, and it is `spawn_agent`. Project #5 adds none.
+
+## The fiddliest twenty lines in the repo
+
+There is a genuinely awkward problem hiding in "forward its trace upward."
+
+A sub-agent produces a whole trace *while the parent is sitting inside*
+`await Promise.all(...)`. And an async generator **cannot `yield` from inside a
+callback**, and cannot yield while parked on an await.
+
+Do the obvious thing and the UI shows nothing for forty seconds and then
+everything at once.
+
+<Callout type="gotcha" title="You cannot yield from inside a callback">
+  This is a property of async generators, not a bug you can work around by
+  restructuring the `Promise.all`. The events exist; there is simply no legal
+  place to hand them out from.
+</Callout>
+
+The fix is a buffer plus a doorbell:
+
+```ts title="lib/crew.ts"
+const queue = createEventQueue<LoopEvent>();
+const running = Promise.all(toolUses.map(runOne));   // pushes into the queue
+void running.then(() => queue.close(), () => queue.close());
+
+for await (const event of queue) yield event;        // drain while they work
+const outcomes = await running;
+```
+
+The workers push into the queue from wherever they are. The generator drains
+the queue, which it *can* legally yield from. And `queue.close()` is wired to
+both the resolve and reject paths, because a queue that only closes on success
+hangs forever the first time a worker throws.
+
+<Checkpoint>
+  Run the crew demo and watch three lanes update **while** they are working,
+  rather than appearing all at once at the end.
+
+  If your parallel work goes silent and then reports in a lump, this is the
+  shape of the fix.
+</Checkpoint>
+
+<Callout type="insight" title="Those twenty lines earn their keep a second time">
+  Project #5's sampling handler is built **inside** the tool-running block of
+  `runAgentLoop`, and that placement is not arbitrary — it needs `emit`.
+
+  A server's sampling request happens *inside* a tool call, so getting a "the
+  kitchen is asking to spend 6.0¢" event out to the UI is exactly the same
+  problem as getting a worker's trace out. `createEventQueue` was already
+  there, for a completely unrelated feature.
+</Callout>
+
+## What a local tool looks like to the model
+
+Nothing special. That is the point.
+
+It appears in `tools/list` output alongside the eleven MCP tools, with a name,
+a description and an input schema. The model picks it the same way it picks any
+other tool, for the same reason: **the description convinced it.**
+
+The only thing that differs is the dispatch — the toolbox recognises the name
+as local and calls a function instead of making an HTTP request.
+
+<Callout type="quote">
+  Servers propose. The host disposes. A local tool is the host proposing to
+  itself.
+</Callout>

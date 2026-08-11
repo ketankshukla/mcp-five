@@ -5,12 +5,137 @@ summary: "Append the whole reply. All results in one message. Cap the loop, hard
 project: 2
 ---
 
-## Coming in a later milestone
+Every one of these cost real time to learn. None of them is difficult once
+somebody has said it out loud.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/host/three-rules.mdx`.
+## Rule 1 — Append the whole reply, not just the text
 
-### What will be here
+```ts
+// ❌ throws away the tool_use block
+const text = response.content.find(b => b.type === "text").text;
+messages.push({ role: "assistant", content: text });
 
-Append the whole reply. All results in one message. Cap the loop, hard.
+// ✅
+messages.push({ role: "assistant", content: response.content });
+```
+
+`response.content` is a **list of blocks**: text, thinking, and `tool_use`.
+Extract just the text and the `tool_use` block vanishes — so your `tool_result`
+refers to an id the API has never heard of, and it rejects the whole request
+with a message about a mismatched `tool_use_id`.
+
+<Callout type="gotcha" title="The error points at the result. The bug is in the append.">
+  This is what makes it cost an hour rather than a minute. You will read that
+  error and go and stare at the code that builds `tool_result` blocks, which is
+  correct, while the actual mistake is thirty lines earlier in a place the
+  error never mentions.
+
+  The general shape: **when an id doesn't match, suspect the thing that was
+  supposed to define it, not the thing referencing it.**
+</Callout>
+
+## Rule 2 — All tool results go back in ONE user message
+
+If the model asks for three tools at once, send **one** user message containing
+three `tool_result` blocks.
+
+<Diagram
+  caption="One message per result technically works, and quietly teaches the model to stop asking for tools in parallel — which is a performance regression with no error attached to it."
+>
+{`flowchart TB
+    subgraph BAD["❌ one message per result"]
+        direction TB
+        B1["user: tool_result A"] --> B2["user: tool_result B"] --> B3["user: tool_result C"]
+        B4["works, but quietly teaches the model<br/>to stop asking for tools in parallel"]
+    end
+
+    subgraph GOOD["✅ one message, three blocks"]
+        direction TB
+        G1["user: [ tool_result A,<br/>tool_result B,<br/>tool_result C ]"]
+        G2["parallel calls keep working"]
+    end
+
+    style BAD fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style GOOD fill:#052e16,stroke:#4ade80,color:#dcfce7`}
+</Diagram>
+
+The failure mode here is the nasty kind: **nothing breaks.** Your agent still
+works. It is just slower and more expensive than it should be, forever, and no
+test will ever tell you.
+
+<Callout type="insight" title="This rule gets a second life in project #3">
+  Every `tool_use` block needs **exactly one** matching `tool_result`, or the
+  API rejects the entire request. That is why a *denied* tool still has to send
+  a result back saying it was denied — you cannot simply omit it.
+
+  See [The deny branch](/learn/gate/the-deny-branch).
+</Callout>
+
+## Rule 3 — Cap the loop, hard
+
+```ts
+const MAX_ITERATIONS = 10;
+```
+
+<Callout type="quote">
+  An unbounded tool-calling loop is not a hang. It's a bill.
+</Callout>
+
+That is the whole rule, and it is worth being precise about why it is worse
+than an ordinary infinite loop. A normal runaway loop burns CPU you have
+already paid for. This one makes a **paid API call** every time round, with a
+conversation that is **larger every time**.
+
+Two more things belong in the same seatbelt:
+
+**Handle every `stop_reason` explicitly.** `end_turn`, `max_tokens`, `refusal`,
+`pause_turn` each get their own branch. A loop that only asks *"is it
+`tool_use`?"* is a loop that can spin on a case you didn't think about.
+
+**Put the token count in the UI, per iteration.** Partly a feature. Mostly a
+seatbelt. You cannot manage a cost you cannot see.
+
+<Callout type="warning" title="And the cost is superlinear in iterations">
+  Because each trip resends everything before it. A five-step task does not
+  cost five times a one-step task — **it costs more.**
+
+  This is the single most surprising thing about running agents in production,
+  and it is the mechanism behind project #4's entire argument. See [The
+  meter](/learn/host/the-meter), then [The
+  ceiling](/learn/crew/the-ceiling).
+</Callout>
+
+## Where the secret lives
+
+Not a rule so much as a fact with no workaround.
+
+**A browser cannot keep a secret.** If `ANTHROPIC_API_KEY` appears anywhere in
+a client component it is compiled into the JavaScript bundle, served to every
+visitor, and scraped within hours.
+
+<Diagram
+  caption="The browser sends plain text and receives a stream of loop events. It never sees the API key, the MCP shared token, or even which servers exist. This is why an AI app always needs a server in the middle."
+>
+{`flowchart LR
+    subgraph BROWSER["🌐 the browser — public"]
+        CHAT["app/Chat.tsx<br/><i>no key, no SDK,<br/>no server URLs</i>"]
+    end
+
+    subgraph SERVER["🔒 the server — private"]
+        ROUTE["app/api/chat/route.ts<br/><b>reads ANTHROPIC_API_KEY</b>"]
+        ENV[".env.local<br/><i>gitignored</i>"]
+        ENV --> ROUTE
+    end
+
+    CHAT -->|"POST /api/chat<br/>just plain text"| ROUTE
+    ROUTE -->|"NDJSON stream<br/>of loop events"| CHAT
+    ROUTE --> API["🧠 Claude API"]
+
+    style BROWSER fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style SERVER fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style ROUTE fill:#0c4a6e,stroke:#38bdf8,stroke-width:2px,color:#e0f2fe`}
+</Diagram>
+
+There is no clever client-side workaround. The same rule covers
+`MCP_SHARED_TOKEN` and, in project #3, `DATABASE_URL` — **a connection string
+that reaches the browser bundle is a public database.**

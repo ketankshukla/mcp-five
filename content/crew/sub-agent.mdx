@@ -5,12 +5,123 @@ summary: "The model gets one extra tool, and its implementation is the function 
 project: 4
 ---
 
-## Coming in a later milestone
+"Multi-agent orchestration" sounds like a framework. A message bus, a
+scheduler, a supervisor tree, a state machine, probably a YAML file.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/crew/sub-agent.mdx`.
+Here is the entire mechanism.
 
-### What will be here
+The model gets **one extra tool**. Its implementation is `runAgentLoop` — the
+function that is calling it.
 
-The model gets one extra tool, and its implementation is the function that is calling it.
+```ts title="lib/crew.ts — with the bookkeeping removed"
+async run(args, context) {
+  for await (const event of runAgentLoop({
+    messages: [{ role: "user", content: briefing(args.task) }],
+    toolbox: context.toolbox,   // same kitchen
+    gate: true,                 // same handbrake
+    delegate: false,            // ← cooks don't hire cooks
+    budget: context.budget,     // same wallet
+  })) {
+    context.emit(event);                       // forward its trace upward
+    if (event.type === "done") return event.finalText;   // its report
+  }
+}
+```
+
+That's it.
+
+## Why it is this small
+
+Look at the signature of the loop. It takes messages in, and yields events out.
+
+A sub-agent is *a thing you give a task to, which then gets on with it and
+reports back.*
+
+<Callout type="quote">
+  Those are the same sentence. There was never anything to build here — only
+  something to notice.
+</Callout>
+
+## And look at what the orchestrator receives
+
+A worker's entire forty-second investigation of eighty cookie jars arrives in
+the orchestrator's conversation as **one paragraph of text**, in an ordinary
+`tool_result` block.
+
+The orchestrator reads it exactly like it reads a dice roll. It has no idea an
+agent produced it.
+
+<Callout type="lesson" title="A sub-agent is a tool that happens to think">
+  This is why delegation composes so cleanly with everything already built.
+  The orchestrator's loop does not need a special case for sub-agents, because
+  from where it sits there is nothing special about them — it asked for a
+  tool, it got text back.
+
+  Every mechanism that already worked on tool calls works here on day one: the
+  gate, the trace, the token accounting, the replay UI.
+</Callout>
+
+## The two sentences in the briefing that matter
+
+The briefing handed to a worker is short, and two clauses in it are
+load-bearing:
+
+**"Reply with a short report, not a transcript."**
+
+A worker that returns its whole trace hands the context problem **straight back
+to the orchestrator** — which is the exact thing delegation was supposed to
+fix. Without this sentence you have paid for three extra agents and moved the
+ceiling nowhere.
+
+**"If you run out of room, report what you DID establish."**
+
+Turns a partial failure into partial data. A worker that hits its iteration cap
+and says nothing is a hole in the answer. One that says *"I inspected jars 1
+through 54 and found three tampered; 55–80 were not reached"* is a result the
+orchestrator can act on, and a human can see the gap.
+
+<Terminal title="npm run crew -- --boss">
+{`  │  👷 hired #1 "jars 1-20"
+  │  👷 hired #2 "jars 21-40"
+  │  👷 hired #3 "jars 41-60"
+  │  ✅ #1 "jars 1-20" — 3 iters, 14,654 tokens, end_turn`}
+</Terminal>
+
+## The honest question
+
+Sub-agents are impressive to watch. Three lanes light up, tool calls scroll
+past, reports come back, and the whole thing *feels* like an upgrade.
+
+**Feeling like an upgrade is not being one.**
+
+Every worker re-reads the system prompt and the tool definitions, and there is
+a summarising trip home on top. The cost of delegation is real, immediate, and
+paid on **every single run**. The benefit is conditional on the job being big
+enough.
+
+<Compare
+  leftLabel="60 jars — the demo size"
+  rightLabel="240 jars — past the ceiling"
+  left={<><p>one agent: <strong>100%</strong> · ~99k tokens</p><p>a crew: <strong>100%</strong> · ~83k tokens</p><p><strong>A wash.</strong> Same answer, comparable cost, difference inside run-to-run variance.</p></>}
+  right={<><p>one agent: <strong>0 of 36</strong> · 439k tokens</p><p>a crew: <strong>36 of 36</strong> · 248k tokens</p><p>Correct <em>and</em> roughly half the price.</p></>}
+/>
+
+<Callout type="insight" title="At the demo size it is a wash, and that itself is the finding">
+  The useful conclusion is *not* "delegate everything." It is that at this size
+  **the decision doesn't matter much** — which is worth knowing before you
+  spend a week building an orchestrator.
+
+  So project #4 ships `scripts/08-compare.ts`: the same eval cases run twice,
+  once with `spawn_agent` withheld and once with it offered. Same model, same
+  prompt, same toolbox, same gate, same seatbelts. **One flag differs.**
+</Callout>
+
+## Which raises the thing that cannot live on a server
+
+`spawn_agent` needs `context.toolbox`, `context.budget`, and the ability to
+emit events into *this* run's trace. None of that survives a trip over HTTP.
+
+So the loop has to learn about a kind of tool it has never had before — and
+that turns out to be a security boundary as well as a plumbing detail.
+
+[Local tools →](/learn/crew/local-tools)

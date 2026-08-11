@@ -5,12 +5,117 @@ summary: "say_hello, roll_dice, secret_code, cookie_jar — and why a dice rolle
 project: 1
 ---
 
-## Coming in a later milestone
+Four tools, each chosen to teach exactly one thing.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/server/four-tools.mdx`.
+| Tool | What it teaches |
+|---|---|
+| `say_hello` | The simplest tool that can exist. One input, one sentence out. |
+| `roll_dice` | Optional inputs, defaults, and guard rails via `.min()` / `.max()`. |
+| `cookie_jar` | State that survives between calls — and a tool that politely says **no**. |
+| `secret_code` | Why tools beat guessing. Letter-shift maths an AI would fumble in its head. |
 
-### What will be here
+Plus one resource, `cookiejar://status`, and one prompt, `bedtime_story`.
 
-say_hello, roll_dice, secret_code, cookie_jar — and why a dice roller goes first.
+## Why a dice roller is the perfect first tool
+
+This is the choice worth stealing, and the reason is not that dice are fun.
+
+<Callout type="lesson" title="The model cannot fake it">
+  Ask a language model for a random number and it will hand you one. It will
+  say 7 far more often than chance allows, because it is pattern-matching, not
+  rolling. It has no source of randomness and no way to get one.
+
+  So when your terminal prints `Rolled 3d20 -> [10, 4, 16]`, **you know the
+  tool actually ran.** There is no other way those numbers could exist.
+</Callout>
+
+Compare that to a first tool like `get_weather` or `summarise_text`. The model
+can produce a plausible-looking answer to either one without calling anything,
+and you will spend an afternoon unsure whether your integration works or the
+model is being helpful.
+
+A first tool should be a thing the model **provably cannot do alone**. Dice
+qualify. So does anything that touches real state, which is why the cookie jar
+is second.
+
+## `secret_code` — the same argument, sharper
+
+Letter-shift ciphers are the other kind of thing models are bad at: mechanical,
+per-character transformations that require tracking position and never
+drifting.
+
+Ask a model to Caesar-shift a sentence by 3 in its head and it will get most of
+it right and quietly corrupt a couple of letters. Give it a tool and the answer
+is exact, every time.
+
+<Callout type="insight" title="This one also sets up project #2">
+  Project #2 connects **two** servers, and both of them have a tool called
+  `secret_code` — one does Caesar, one does Atbash.
+
+  That collision is deliberate, and it is how [One shelf, many
+  servers](/learn/host/the-toolbox) demonstrates why namespacing is not
+  optional.
+</Callout>
+
+## `cookie_jar` — state, and a tool that says no
+
+The cookie jar has four actions: `look`, `add`, `eat`, `refill`. It is the
+first tool with a *memory* — the count persists between calls — and the first
+one that can refuse.
+
+Ask it to eat 500 cookies when there are 78 and it does not crash:
+
+<Terminal>
+{`  -> WANTS cookiejar__cookie_jar  {"action":"eat","count":500}
+     <- RAN  Can't eat 500 -- there are only 78 cookie(s) in the jar. Nice try.`}
+</Terminal>
+
+A sentence, not an exception. The model reads it, understands, and adapts:
+
+<Terminal>
+{`  ANSWER: Looks like the jar only has 78 cookies in it right now, so I can't
+  eat 500 — that would leave it in cookie-debt! Would you like me to eat all
+  78 instead, or a smaller amount?`}
+</Terminal>
+
+Nobody wrote that recovery. It falls out of returning readable English.
+
+<Callout type="insight" title="And notice the shape of the arguments">
+  `cookie_jar { action: "eat" }` is dangerous. `cookie_jar { action: "look" }`
+  is not. **Same tool.**
+
+  Hold onto that. It is the entire argument of [Rules read arguments, not
+  names](/learn/gate/rules-read-arguments), two sections from now.
+</Callout>
+
+## The resource and the prompt
+
+One of each, mostly to show the shape:
+
+| | | Who decides |
+|---|---|---|
+| 📄 resource | `cookiejar://status` — the current count, as something to *read* | the **host** loads it |
+| 💬 prompt | `bedtime_story` — a fill-in-the-blank instruction taking a `hero` | the **human** picks it |
+
+Neither gets used again until project #5, which is its own small lesson: they
+were there from the very first project, sitting in the same file as the tools,
+and four projects went by without anybody reaching for them.
+
+<Callout type="gotcha" title="A detail that only surfaced four projects later">
+  When project #5 finally enumerated capabilities across every server it could
+  reach, **project #1's live deployment turned out to offer a resource and a
+  prompt nobody remembered writing** — and to negotiate the modern protocol era
+  as well.
+
+  It had been advertising them, correctly, to anybody who asked, for the entire
+  series. Nobody had ever asked.
+</Callout>
+
+## Adding your own
+
+The genuinely nice thing about this design: copy the `say_hello` block, rename
+it, and change the description. That is all it takes.
+
+The AI does not need to be told. Its next `tools/list` picks the new tool up,
+reads your description, and starts using it when your description convinces it
+to.

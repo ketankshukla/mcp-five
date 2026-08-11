@@ -5,12 +5,143 @@ summary: "Never assert on prose. Score a pass rate. Include a case where the rig
 project: 3
 ---
 
-## Coming in a later milestone
+You changed the system prompt. Did it help?
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/gate/evals.mdx`.
+Without evals the honest answer is *"I tried it once and it looked fine"* —
+which is not engineering. It is hoping, with extra steps.
 
-### What will be here
+## An eval is embarrassingly simple
 
-Never assert on prose. Score a pass rate. Include a case where the right answer is nothing.
+A list of prompts, and what should happen for each.
+
+```text
+"how many cookies are in the jar?"      -> cookie_jar { action: "look" }
+"roll 3d20 then add that many cookies"  -> roll_dice, THEN cookie_jar add
+"empty the jar completely"              -> a call the gate stops
+"what is MCP, in one sentence?"         -> NOTHING AT ALL
+```
+
+Run them, count, get a number. Change something. Run again.
+
+That's it. The machinery is trivial. **The three rules below are the entire
+difficulty**, and each one is the difference between a suite that helps and a
+suite that quietly lies to you.
+
+## Rule 1 — Never assert on prose
+
+<Compare
+  leftLabel="Asserting on the answer text"
+  rightLabel="Asserting on the calls"
+  left={<><p><code>&quot;The jar has 78 cookies&quot;</code></p><p><code>&quot;There are 78 cookies!&quot;</code></p><p><code>&quot;78 🍪&quot;</code></p><p>One correct answer, three different strings. Your suite fails at random.</p></>}
+  right={<><p><code>cookie_jar &#123; action: &quot;look&quot; &#125;</code></p><p>Which tool, with what arguments.</p><p>Structured, stable, and it is the behaviour you actually care about.</p></>}
+/>
+
+<Callout type="gotcha" title="And the second-order failure is the real cost">
+  A suite that fails at random teaches you to ignore red. Once you have learned
+  that, it is **worse than nothing** — you now have a broken alarm and a habit
+  of dismissing alarms.
+</Callout>
+
+## Rule 2 — Run each case several times and score a pass rate
+
+The model is not deterministic.
+
+A case that passes 60% of the time passes on the first try more often than not.
+One green tick is a coin flip you mistook for a measurement.
+
+```bash
+npm run evals -- --attempts 3 --label "baseline"
+```
+
+Three attempts is the minimum that tells you anything. Six cases at three
+attempts is 18 data points, and the score is `18/18` or it isn't.
+
+## Rule 3 — Include a case where the correct answer is calling nothing
+
+This is the one everybody skips.
+
+<Callout type="quote">
+  An agent that reaches for tools when it shouldn't is exactly as broken as one
+  that doesn't reach when it should.
+</Callout>
+
+Slower, more expensive, and touching things it had no business touching. And
+you will never catch it by hand, because **it looks like enthusiasm.** The
+agent is clearly working hard. It called four tools. It seems great.
+
+`no-tools` is the case name in project #3's suite: *"what is MCP, in one
+sentence?"* — the right answer is a sentence, and zero tool calls.
+
+## It has to be able to fail
+
+A suite that passes everything on its first run has told you nothing until you
+have watched it go red.
+
+So the gate rules were deliberately sabotaged and the suite re-run:
+
+<Terminal title="npm run evals — with the gate broken on purpose">
+{`  gate-fires               ✗✗    0%  0/2
+
+  WHAT WENT WRONG
+  gate-fires  (0/2)
+      expected: requests a destructive call that the host's gate stops
+      actual:   no call was gated (called: cookiejar__cookie_jar)
+
+  SCORE: 0%   (0/2)
+  PREVIOUS: 100%   (18/18)  "baseline"
+  REGRESSED: -100 points
+
+  per case:
+    gate-fires               100% ->   0%  (-100)`}
+</Terminal>
+
+<Callout type="lesson" title="That last block is the whole point of storing results in Postgres">
+  Not *"is it good?"* but **"did it move, and where?"**
+
+  A score of 94% means nothing on its own. A score of 94% that was 100%
+  yesterday, with the delta attributed to one named case, is an actionable bug
+  report.
+
+  ```bash
+  npm run evals -- --attempts 3 --label "before"
+  # ...change the system prompt...
+  npm run evals -- --attempts 3 --label "after"
+  ```
+</Callout>
+
+## The six cases
+
+| Case | Asserts |
+|---|---|
+| `look-only` | reads the jar, changes nothing |
+| `chain-dice-to-cookies` | rolls, then adds *that* number — the chaining demo |
+| `no-tools` | calls **nothing at all** |
+| `gate-fires` | requests something the host's gate stops |
+| `picks-right-cipher` | disambiguates the two `secret_code` tools |
+| `reads-history` | reaches for `jar_history` rather than guessing |
+
+Six cases, three attempts each, `18/18`. And they survived contact: project #4
+added a third MCP server, four new tools, a recursive loop and a rewritten
+persistence path, and re-ran this exact suite unchanged as a regression net.
+
+<Terminal>
+{`  look-only  chain-dice-to-cookies  no-tools  gate-fires  picks-right-cipher  reads-history
+  SCORE: 100%   (18/18)`}
+</Terminal>
+
+<Callout type="warning" title="One more thing, and it is the kind of bug that ruins a whole afternoon">
+  The suite **snapshots the cookie jar before it runs and restores it after.**
+
+  An eval suite that corrupts the state it measures gives you different answers
+  depending on what you ran last — which looks exactly like model
+  non-determinism, and will send you looking for it in the wrong place.
+</Callout>
+
+## Where this goes
+
+Project #5 notices that an eval case is a **prompt** (costs money) and a
+**check** (a pure function) — and that project #3 already writes every loop
+event to Postgres.
+
+So the checks can be re-run against stored traces for nothing. 13/13, `$0.00`.
+See [The suite that costs nothing](/learn/ledger/zero-dollar-evals).

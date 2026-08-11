@@ -1,16 +1,142 @@
 ---
 title: "The deny branch"
 emoji: "🚫"
-summary: "A denied tool still needs a tool_result. And the wording matters more than it looks."
+summary: "A denied tool still needs a tool_result — and the wording matters more than it looks."
 project: 3
 ---
 
-## Coming in a later milestone
+"Deny" sounds like it should mean *"send nothing back."*
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/gate/the-deny-branch.mdx`.
+It cannot.
 
-### What will be here
+## Every tool_use needs exactly one tool_result
 
-A denied tool still needs a tool_result. And the wording matters more than it looks.
+This is [rule 2 from project #2](/learn/host/three-rules) collecting its debt.
+Every `tool_use` block in an assistant turn needs **exactly one** matching
+`tool_result`, or the API rejects the entire request — not the tool, the whole
+message.
+
+So a denial has to be a result that *says no*.
+
+<Diagram
+  caption="The host synthesises a tool_result carrying the refusal, marked is_error, and hands it back to the loop as though a tool had returned it. The model reads it like any other result and adapts."
+>
+{`flowchart TB
+    DENY["🧑 clicks Deny"] --> SYNTH["🎛️ host writes a tool_result:<br/><i>'the operator DENIED this. The tool<br/>was not run. Do not retry. Explain<br/>what you would do instead.'</i><br/>is_error: true"]
+    SYNTH --> LOOP["🔁 back into the loop as an<br/>ordinary tool result"]
+    LOOP --> ADAPT["🧠 'That was declined, so nothing<br/>changed. I could instead...'"]
+
+    style DENY fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style SYNTH fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style ADAPT fill:#052e16,stroke:#4ade80,color:#dcfce7`}
+</Diagram>
+
+## The wording matters more than it looks
+
+Here is where it gets expensive.
+
+Say only *"denied"* and the model very reasonably tries the same call again.
+Which gets denied again. Which it tries again.
+
+<Callout type="gotcha" title="That is how you burn ten iterations and real money discovering you wrote a bad sentence">
+  It is not a bug in the loop, or the gate, or the model. It is a bug in a
+  string literal — and it will not look like one, because every component is
+  behaving exactly as designed.
+</Callout>
+
+So the text does three specific jobs:
+
+| The text says | Because otherwise |
+|---|---|
+| **a human denied this** | the model treats it as a transient failure |
+| **the tool was not run** | the model assumes partial completion |
+| **do not retry — explain what you'd do instead** | it retries, forever |
+
+That third clause is what turns a refusal into a useful answer rather than a
+dead end. Here is a real denial, verbatim:
+
+<Terminal>
+{`ANSWER: I attempted to smash the jar as you asked, but the operator reviewing
+this action denied the request, so nothing happened — the jar and its history
+are still intact.
+
+If you want, here's what I can do instead:
+- Eat or add cookies to change the count (reversible, non-destructive)
+- Look at the current jar contents
+- Check the history of what's happened to the jar so far`}
+</Terminal>
+
+Nobody wrote that recovery logic. It falls out of a well-worded sentence in a
+`tool_result`.
+
+<Callout type="lesson" title="A failure message that doesn't say what failed will be mistaken for data">
+  The model has no channel for out-of-band information. Everything it knows
+  about what just happened arrives as text in the conversation. So an error
+  string is not diagnostics — **it is a prompt**, and it should be written like
+  one.
+
+  This is one of the six lessons that survived all five projects. It shows up
+  again in project #5, one network hop further out: [a spend refusal that only
+  refuses makes the server's own model retry the identical
+  call](/learn/ledger/gate-cannot-pause), and each retry costs the agent
+  another round trip.
+</Callout>
+
+## The two demos
+
+### It recovers from failure, and remembers
+
+<Callout type="quote">
+  Eat 500 cookies from the jar.
+</Callout>
+
+There aren't 500. Real output:
+
+<Terminal>
+{`  -> WANTS cookiejar__cookie_jar  {"action":"eat","count":500}
+
+  ⏸  PAUSED. The request ends. The agent is now a row in Postgres.
+       why it stopped: Eating removes cookies from the jar. Cookies cannot
+                       be un-eaten, so a human should see the number first.
+
+  [request 2]  human clicks APPROVE
+     <- RAN  Can't eat 500 -- there are only 78 cookie(s) in the jar. Nice try.
+
+  ANSWER: Looks like the jar only has 78 cookies in it right now, so I can't
+  eat 500 — that would leave it in cookie-debt! Would you like me to eat all
+  78 instead, or a smaller amount?`}
+</Terminal>
+
+Note that this pauses **even though it was going to fail anyway.** The gate does
+not know the jar only has 78 in it, and it should not — a gate that tried to
+predict outcomes would be a second, worse implementation of the tool.
+
+And the whole run, including the failed attempt, is still in the database,
+replayable next week.
+
+### It stops and asks
+
+<Callout type="quote">
+  Empty the jar completely.
+</Callout>
+
+<Terminal>
+{`The agent wants to call:
+
+  cookiejar__cookie_jar   { "action": "eat", "count": 78 }
+
+  [ Approve ]    [ Deny ]`}
+</Terminal>
+
+**Where does 78 come from?** The model called `look` first — not gated, so it
+just ran — read *"The jar has 78 cookie(s)"*, and used it.
+
+<Callout type="insight">
+  Nothing in this repo connects "empty" to "78". That is [project #2's agent
+  loop](/learn/host/a-while-loop) still doing its thing, chaining one tool's
+  output into the next tool's input, now with a handbrake on it.
+
+  And it is the reason the approval card is worth reading: the number in it was
+  computed by the agent thirty seconds ago from live state, and it is exactly
+  the number that is about to be acted on.
+</Callout>

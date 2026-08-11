@@ -5,12 +5,156 @@ summary: "Thirteen stages, a checkpoint for each, and two gotchas worth carrying
 project: 1
 ---
 
-## Coming in a later milestone
+The full walkthrough is
+[`BUILD_FROM_SCRATCH.md`](https://github.com/ketankshukla/learn-mcp-5-year-old/blob/main/BUILD_FROM_SCRATCH.md)
+in the repo. This is the shape of it, and the two things that actually broke.
 
-This page is a stub. The chrome around it is real: the sidebar, the pager and
-the on-this-page rail all come from `lib/navigation.ts`, and this file is
-`content/server/build-it-1.mdx`.
+<Steps>
+  <Step n={0} title="Prerequisites">
+    Node, npm, a GitHub account, a Vercel account. No API keys — a server
+    costs nothing to run and needs nothing to run it.
+  </Step>
 
-### What will be here
+  <Step n={1} title="Scaffold the Next.js app">
+    <Callout type="gotcha" title="create-next-app refuses to share a folder">
+      It will not scaffold into a directory containing **any** unrecognised
+      file — and yours already has the kickoff document in it.
 
-Thirteen stages, a checkpoint for each, and two gotchas worth carrying.
+      Scaffold to a temp directory and copy in:
+
+      ```bash
+      npx create-next-app@latest /tmp/scaffold --typescript --app --tailwind \
+        --no-src-dir --use-npm --turbopack --eslint
+      rm -rf /tmp/scaffold/.git
+      cp -r /tmp/scaffold/. ./
+      ```
+    </Callout>
+
+    <Checkpoint>
+      `npm run dev` serves the Next.js starter.
+    </Checkpoint>
+  </Step>
+
+  <Step n={2} title="Install the MCP packages">
+    <Callout type="gotcha" title="mcp-handler peer-depends on @modelcontextprotocol/server">
+      **Not** `@modelcontextprotocol/sdk`. The names are close enough that you
+      will install the wrong one, and npm will let you, and the failure comes
+      later and doesn't mention the package.
+    </Callout>
+  </Step>
+
+  <Step n={3} title="The route handler skeleton">
+    The whole server is one file: `app/api/mcp/route.ts`.
+
+    <Checkpoint>
+      Knock on the door and get an answer:
+
+      ```bash
+      curl -X POST http://localhost:3000/api/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+      ```
+    </Checkpoint>
+  </Step>
+
+  <Step n={4} title="Your first tool">
+    `roll_dice`, for the reason on [The four
+    tools](/learn/server/four-tools): the model cannot fake it, so you can
+    tell whether the tool actually ran.
+  </Step>
+
+  <Step n={5} title="Read the response properly">
+    The reply may be plain JSON **or** Server-Sent Events, depending on how
+    the handler feels. Both are legal. A client that assumes one gets a
+    confusing parse error against a server that chose the other — which is
+    exactly what project #2 has to deal with when it writes a client by hand.
+  </Step>
+
+  <Step n={6} title="Three more tools, three more concepts">
+    `say_hello` for the minimum, `cookie_jar` for state and refusal,
+    `secret_code` for a thing models are bad at.
+  </Step>
+
+  <Step n={7} title="A resource and a prompt">
+    <Checkpoint>
+      ```bash
+      mcp '{"jsonrpc":"2.0","id":3,"method":"resources/list"}'
+      mcp '{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"cookiejar://status"}}'
+      ```
+    </Checkpoint>
+  </Step>
+
+  <Step n={8} title="Build a client in the browser">
+    A tiny MCP client in the page — the other half of the protocol, so you can
+    watch the exact JSON going back and forth rather than trusting a
+    description of it.
+  </Step>
+
+  <Step n="9–10" title="The landing page, then typecheck and build">
+    ```bash
+    npx tsc --noEmit && npx eslint . && npm run build
+    ```
+  </Step>
+
+  <Step n="11–12" title="Git, GitHub, and deploy via Vercel">
+    Vercel is wired to the repo, so shipping a new tool is a push.
+
+    <Checkpoint>
+      **Verify against production, not localhost.** Same curl, different
+      hostname:
+
+      ```bash
+      curl -s -X POST https://YOUR-APP.vercel.app/api/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+      ```
+    </Checkpoint>
+  </Step>
+
+  <Step n={13} title="Connect it to Claude">
+    ```bash
+    claude mcp add --transport http cookie-jar https://learn-mcp-5-year-old.vercel.app/api/mcp
+    ```
+
+    Then say *"roll me three twenty-sided dice"* and watch it reach into the
+    jar.
+  </Step>
+</Steps>
+
+## How a change reaches the internet
+
+<Diagram
+  caption="Push to GitHub, Vercel builds, and Claude sees the new tool on its next tools/list. There is no registration step and nothing to tell the model — it re-reads the list and your description does the rest."
+>
+{`flowchart LR
+    EDIT["✏️ add a tool in<br/>route.ts"] --> COMMIT["git commit"]
+    COMMIT --> PUSH["git push origin main"]
+    PUSH --> GH["🐙 GitHub"]
+    GH -->|"webhook"| VC["▲ Vercel builds"]
+    VC --> LIVE(["🌍 learn-mcp-5-year-old<br/>.vercel.app/api/mcp"])
+    LIVE --> CLAUDE["🧠 Claude sees the<br/>new tool on next<br/>tools/list"]
+
+    style EDIT fill:#1e293b,stroke:#38bdf8,color:#f8fafc
+    style GH fill:#1e293b,stroke:#a78bfa,color:#f8fafc
+    style VC fill:#78350f,stroke:#fbbf24,color:#fef3c7
+    style LIVE fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style CLAUDE fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe`}
+</Diagram>
+
+## The two gotchas worth carrying forward
+
+Both of these bit again in later projects, which is the test of whether a
+gotcha is worth writing down.
+
+| # | Gotcha | Bit again in |
+|---|---|---|
+| 1 | `create-next-app` refuses to scaffold into a non-empty folder | #2, #3, #4, #5 — every single one |
+| 2 | `mcp-handler` peer-depends on `@modelcontextprotocol/server`, not `…/sdk` | #5 |
+
+The other two from project #1's appendix — the `406` from a missing `Accept`
+header, and the cookie jar forgetting — are covered on [The vending
+machine](/learn/server/vending-machine) and [The
+sandcastle](/learn/server/the-sandcastle). All four, with causes and fixes, are
+in [the compendium](/learn/picture/gotchas).
