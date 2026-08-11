@@ -5,38 +5,57 @@ summary: "A server advertises what it can do and then waits. Three messages are 
 project: 1
 ---
 
-An MCP server is a **vending machine**.
+Project #1 builds an **MCP server**: four tools, one resource, one prompt,
+deployed to the internet and reachable from Claude Desktop. It needs no API
+key, no database, and no environment variables.
+
+The whole thing is one file. By the end of this section you will understand
+every line of it.
+
+## Part 1 · A server is a vending machine
 
 It stands there. It has a lit-up panel listing what is inside. It does nothing
 at all until somebody presses a button, and then it does exactly the one thing
 that button does and goes back to standing there.
 
-<Callout type="lesson" title="It never initiates">
-  This is the single most important property of a server, and everything in
-  project #5 is a consequence of it being *almost* true rather than completely
+Three properties, and each one matters later:
+
+**It advertises.** Anybody who asks gets the full list of what it can do,
+without having to know in advance.
+
+**It waits.** It cannot decide to do something. It cannot start a conversation,
+poll you, or push you a notification.
+
+**It is stateless between customers.** Each request arrives, is served, and is
+forgotten. The machine does not remember you.
+
+<Callout type="lesson" title="A server never initiates">
+  This is the single most important property, and almost everything surprising
+  later in the course comes from it being *almost* true rather than completely
   true.
 
-  A server cannot decide to do something. It cannot start a conversation, poll
-  you, or push you a notification. It answers.
+  Hold onto it. In [project #5](/learn/ledger/arrow-points-back) a server
+  finally asks *you* for something — and the entire protocol had to grow a new
+  shape to allow it, because there was no channel for a server to speak first.
 </Callout>
 
-## Three messages are the whole protocol
+## Part 2 · Three messages are the whole protocol
 
 Not three *kinds* of message. Three messages.
 
-| Message | What it means |
-|---|---|
-| `initialize` | *"Hello. Which version of this do you speak?"* |
-| `tools/list` | *"What have you got?"* |
-| `tools/call` | *"Use that one, please, with these arguments."* |
+| Message | In English | When |
+|---|---|---|
+| `initialize` | *"Hello. Which version of this do you speak?"* | once, when a host connects |
+| `tools/list` | *"What have you got?"* | once, just after connecting |
+| `tools/call` | *"Use that one, please, with these arguments."* | every time a tool is used |
 
 That is a complete, working MCP conversation. Everything else in the
 specification — resources, prompts, sampling, elicitation, notifications,
 progress — is a refinement of those three moves.
 
 <Diagram
-  title="D3 · the handshake"
-  caption="The blue band happens once, when the client connects. The amber band is the part you actually notice. Nothing happens between them: the server is waiting, and it will wait indefinitely."
+  title="The handshake, then the work"
+  caption="The blue band happens once, when the host starts. The amber band is the part you notice. In between, the server is simply waiting — and it will wait indefinitely, at no cost, because nothing is running."
 >
 {`sequenceDiagram
     autonumber
@@ -63,25 +82,58 @@ progress — is a refinement of those three moves.
     end`}
 </Diagram>
 
-Look at step 6, and then look at what is *not* there. Nothing in the server
-connected the words *"three twenty-sided dice"* to `{ sides: 20, times: 3 }`.
-The server never saw your sentence. It received arguments and ran a function.
+### Read step 6 again, and then notice what is missing
 
-The matching happened at step 5, in the model, against **the descriptions the
-server advertised at step 4**. That is why the next page is about descriptions.
+Nothing in the server connected the words *"three twenty-sided dice"* to
+`{ sides: 20, times: 3 }`. **The server never saw your sentence.** It received
+arguments and ran a function.
 
-## The envelope is boring on purpose
+The matching happened at step 5, inside the model, against the *descriptions
+the server advertised at step 4*. That is the entire mechanism, and it is why
+the next page is about descriptions.
 
-Every one of those messages is JSON-RPC 2.0, which is a specification you can
-learn in about a minute:
+### What `initialize` is actually for
+
+It looks like ceremony. It is doing two real jobs.
+
+**Version negotiation.** The client says which protocol revision it speaks; the
+server answers with one it can support. This matters more than it sounds — in
+[project #5](/learn/ledger/protocol-by-hand) two different protocol eras turn
+out to coexist, and which one you land on determines whether a whole capability
+is available.
+
+**Capability declaration.** Each side says what it can handle. This is the
+mechanism that makes the dangerous parts of MCP opt-in: a host that never
+declares `sampling` cannot be asked to spend money, because the request fails
+at the protocol layer.
+
+## Part 3 · The envelope is boring on purpose
+
+Every message is JSON-RPC 2.0, which you can learn in about a minute:
 
 ```json
 { "jsonrpc": "2.0", "id": 1, "method": "tools/call",
   "params": { "name": "roll_dice", "arguments": { "sides": 20, "times": 3 } } }
 ```
 
-An `id` so replies can be matched to requests. A `method`. Some `params`. That
-is the entire envelope, and you can poke a real server with it right now:
+| Field | Purpose |
+|---|---|
+| `jsonrpc` | Always `"2.0"`. Identifies the envelope format. |
+| `id` | Any number. The reply carries the same one, so replies can be matched to requests. |
+| `method` | What you want. |
+| `params` | Arguments for it. |
+
+Replies come back as either `result` or `error`, carrying the same `id`:
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "result": { "content": [ … ] } }
+{ "jsonrpc": "2.0", "id": 1, "error": { "code": -32601, "message": "Method not found" } }
+```
+
+That is the whole wire format. There is no MCP daemon, no special port, no
+binary encoding, no persistent socket required.
+
+### Poke a real one
 
 ```bash
 curl -X POST https://learn-mcp-5-year-old.vercel.app/api/mcp \
@@ -90,28 +142,112 @@ curl -X POST https://learn-mcp-5-year-old.vercel.app/api/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-<Callout type="gotcha" title="Accept must list both types">
+<Checkpoint>
+  Four tools come back, each with a `name`, a `description` and an
+  `inputSchema`. That is a live server on the public internet answering a
+  protocol message from your terminal.
+</Checkpoint>
+
+<Callout type="gotcha" title="`Accept` must list both content types">
   `application/json` **and** `text/event-stream`. Send only the first and you
   get a bare `406 Not Acceptable` with no explanation of what it wanted.
 
-  This is the first thing that bites everybody, and it bites again in project
-  #2 when the client is written by hand.
+  The reason: the server is allowed to answer with either a plain JSON body or
+  a Server-Sent Events stream, so the client has to declare it can cope with
+  both. Neither `curl` nor `fetch` adds this for you.
 </Callout>
 
-## The whole server is one file
+## Part 4 · The whole server is one file
 
 Worth saying plainly, because "build an MCP server" sounds like a project.
 
-Project #1's server — four tools, one resource, one prompt, deployed and
-reachable from Claude Desktop — is a single route handler:
+Project #1's server is a single Next.js route handler at
 `app/api/mcp/route.ts`. There is no framework, no daemon, no long-lived
-process. It is an HTTP endpoint that receives JSON and returns JSON.
+process. **It is an HTTP endpoint that receives JSON and returns JSON.**
 
-<Callout type="insight" title="And that is why serverless works for servers, and breaks for hosts">
-  A vending machine has no memory of you between visits, and does not need one.
-  Request in, result out.
+The shape is:
 
-  Hold that thought. It is exactly why project #1's cookie jar tells lies (see
-  [The sandcastle](/learn/server/the-sandcastle)), and why project #5's
-  sampling push [cannot work at all](/learn/ledger/the-finding).
+```ts title="app/api/mcp/route.ts"
+import { createMcpHandler } from "mcp-handler";
+import { z } from "zod";
+
+const handler = createMcpHandler((server) => {
+  server.registerTool(
+    "roll_dice",
+    {
+      description: "Roll one or more dice ...",
+      inputSchema: z.object({
+        sides: z.number().int().min(2).max(1000).default(6),
+        times: z.number().int().min(1).max(20).default(1),
+      }),
+    },
+    async ({ sides, times }) => {
+      const rolls = Array.from({ length: times }, () => 1 + Math.floor(Math.random() * sides));
+      const total = rolls.reduce((a, b) => a + b, 0);
+      return { content: [{ type: "text", text: `Rolled ${times}d${sides} -> [${rolls}]  Total: ${total}` }] };
+    },
+  );
+  // …three more tools, one resource, one prompt
+});
+
+export { handler as GET, handler as POST };
+```
+
+`createMcpHandler` does the boring half: parsing the JSON-RPC envelope, routing
+`tools/list` and `tools/call`, converting your Zod schema to JSON Schema,
+validating incoming arguments against it, and formatting the reply.
+
+**You write the tools. It writes the protocol.**
+
+<Callout type="gotcha" title="`mcp-handler` peer-depends on `@modelcontextprotocol/server`">
+  **Not** `@modelcontextprotocol/sdk`, which is what most tutorials install and
+  what project #1 originally installed.
+
+  The names are close enough that npm will let you install the wrong one
+  without complaint, and the failure surfaces later without mentioning the
+  package. Check the peer dependencies and the first import line of the types:
+
+  ```bash
+  node -e "console.log(require('./node_modules/mcp-handler/package.json').peerDependencies)"
+  ```
 </Callout>
+
+## Part 5 · Serverless is a perfect fit for a server, and a trap later
+
+Notice how well a vending machine maps onto a serverless function. Request in,
+result out, nothing remembered, nothing running between customers. You are
+billed only for the milliseconds you actually serve.
+
+That fit is real, and it is why project #1 deploys to Vercel in a single push
+with no configuration.
+
+But it has two consequences you will meet in this course, and both of them are
+surprising the first time:
+
+<Compare
+  leftLabel="It bites in project #1"
+  rightLabel="…and again in project #5"
+  left={<><p>There is nowhere to keep state between requests. <code>let cookiesInJar = 12</code> works on your laptop and <strong>lies on serverless</strong>, because each machine has its own copy and they fall asleep.</p><p>→ <a href="/learn/server/the-sandcastle">The sandcastle</a></p></>}
+  right={<><p>There is no open connection, so a server <strong>cannot push anything to you</strong> — which breaks the way every tutorial implements sampling.</p><p>→ <a href="/learn/ledger/the-finding">The finding</a></p></>}
+/>
+
+<Callout type="insight" title="Same property, two very different bills">
+  "A serverless function has a request, and then it doesn't" explains both. It
+  is worth internalising as a sentence, because it predicts problems you have
+  not met yet.
+</Callout>
+
+## What you now know
+
+- A server **advertises and waits**. It never initiates.
+- Three messages do everything: `initialize`, `tools/list`, `tools/call`.
+- `initialize` negotiates a protocol version and declares capabilities — the
+  mechanism that keeps the dangerous parts opt-in.
+- The wire format is JSON-RPC 2.0 over HTTP POST, and you can drive it with
+  `curl`.
+- `Accept` must list both `application/json` and `text/event-stream`.
+- A whole server is one route handler; the library writes the protocol and you
+  write the tools.
+
+Next: what is actually inside a tool definition, and why one of its four fields
+does almost all the work.

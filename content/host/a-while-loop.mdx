@@ -13,8 +13,9 @@ invented the arguments, made the call, read the result, and turned it into a
 friendly sentence.
 
 That something else is called a **host**, and it did all the interesting work.
+Project #2 builds one.
 
-## Four steps
+## Part 1 · Four steps, and that is the whole thing
 
 "AI agent" sounds like a thing you buy. It isn't. It is four steps you write
 yourself.
@@ -30,9 +31,50 @@ yourself.
   There was never anything else in the box.
 </Callout>
 
+### In actual code
+
+Stripped of bookkeeping, the loop is about twenty lines:
+
+```ts title="lib/agent-loop.ts — the shape"
+let messages = [{ role: "user", content: userText }];
+
+for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
+  // 1 · ask the model, giving it the conversation AND the tool list
+  const response = await anthropic.messages.create({
+    model: "claude-sonnet-5",
+    max_tokens: 4096,
+    tools,                       // built once, outside the loop
+    messages,
+  });
+
+  // 2 · append the WHOLE reply — see rule 1 on the next page
+  messages.push({ role: "assistant", content: response.content });
+
+  // 3 · if it didn't ask for a tool, it answered. Stop.
+  if (response.stop_reason !== "tool_use") break;
+
+  // 4 · run every tool it asked for, in parallel
+  const toolUses = response.content.filter((b) => b.type === "tool_use");
+  const results = await Promise.all(
+    toolUses.map(async (use) => ({
+      type: "tool_result",
+      tool_use_id: use.id,
+      content: await toolbox.dispatch(use.name, use.input),
+    })),
+  );
+
+  // 5 · paste them ALL back as ONE user message, then loop
+  messages.push({ role: "user", content: results });
+}
+```
+
+Read step 5 again. The tool results go back into the conversation **in the
+`user` role** — as though you had typed them. The model has no separate channel
+for tool output. It is all just conversation.
+
 <Diagram
-  title="D4 · the agent loop"
-  caption="The whole pattern. The amber box is where the magic lives — pasting tool results back into the conversation and asking again. Everything else is bookkeeping, and the edge back to the API call is the only thing that makes this an agent rather than a function call."
+  title="The agent loop"
+  caption="The amber box is where the magic lives: pasting results back into the conversation and asking again. Everything else is bookkeeping, and the edge from PASTE back up to CALL is the only thing that makes this an agent rather than a function call."
 >
 {`flowchart TB
     START(["🧑 user message"]) --> BUILD["📋 messages = [ user message ]"]
@@ -59,7 +101,27 @@ yourself.
     style TRUNC fill:#450a0a,stroke:#ef4444,color:#fecaca`}
 </Diagram>
 
-## The demo that proves it
+### What `stop_reason` is telling you
+
+The model tells you *why* it stopped talking, and branching on it properly is
+the difference between a loop and a spin.
+
+| `stop_reason` | Means | What the loop does |
+|---|---|---|
+| `end_turn` | It finished its answer. | Stop. This is success. |
+| `tool_use` | It wants a tool run. | Run it, paste, loop. |
+| `max_tokens` | It was cut off mid-sentence. | Stop and say so — the answer is truncated, not wrong. |
+| `refusal` | It declined. | Stop and surface it. |
+
+<Callout type="gotcha" title="A loop that only asks 'is it tool_use?' can spin">
+  If you write `while (response.stop_reason === "tool_use")` and treat
+  everything else as done, you will silently mishandle `max_tokens` — reporting
+  a truncated half-answer as the final one.
+
+  Give each case its own branch.
+</Callout>
+
+## Part 2 · The demo that proves it
 
 One sentence, chosen because it **cannot be faked**:
 
@@ -67,11 +129,15 @@ One sentence, chosen because it **cannot be faked**:
   Roll 3d20, then put that many cookies in the jar.
 </Callout>
 
-The second half depends on the first half. The model cannot fill in `count`
-until it has seen the dice total — and the dice total does not exist until a
-real server on the real internet has rolled real random numbers.
+Why this sentence? Because the second half **depends on the first half**. The
+model cannot fill in `count` until it has seen the dice total — and the dice
+total does not exist until a real server on the real internet has rolled real
+random numbers.
 
-Here is what actually happened:
+If you see the right number in the second call, the chaining is genuine. There
+is no other explanation available.
+
+### What actually happened
 
 <Terminal title="npm run agent">
 {`--- iteration 1 --------------------------------------------------
@@ -92,39 +158,114 @@ done — end_turn
   cache: 2281 written, 4562 read at ~10% price`}
 </Terminal>
 
-**Look at iteration 2.** `count: 30`.
+### Walking the three iterations
+
+**Iteration 1.** `messages` contains one thing: your sentence. The model sees
+it plus eight tool descriptions, and returns `stop_reason: "tool_use"` asking
+for `roll_dice`. The loop runs it and gets back the string
+`"Rolled 3d20 -> [10, 4, 16]  Total: 30"`.
+
+Now `messages` has three entries: your sentence, the assistant's request, and a
+user message carrying the result.
+
+**Iteration 2.** The model is called again with all three. It reads its own
+previous request *and* the result underneath it — and asks for
+`cookie_jar { action: "add", count: 30 }`.
+
+**Iteration 3.** Called again with all five messages. Nothing left to do, so
+`stop_reason: "end_turn"` and a summary.
+
+### The thing to actually notice
+
+**Look at `count: 30`.**
 
 <Callout type="lesson" title="Nothing in the repo knows that dice have anything to do with cookies">
-  There is no `if (rolledDice) thenAddCookies()`. There is no plan, no
-  workflow, no graph.
+  There is no `if (rolledDice) thenAddCookies()`. No plan. No workflow. No
+  graph. No state machine.
 
   The number moved from the first tool's output into the second tool's input
   because the loop **pasted it into the conversation and asked again** — and
   the model read it the way it reads anything else.
+
+  That is what makes an agent an agent, and you genuinely cannot feel it until
+  you have watched your own loop do it.
 </Callout>
 
-That is what makes an agent an agent. You genuinely cannot feel it until you
-have watched your own loop do it.
+## Part 3 · Server, client, host
 
-## Server, client, host
-
-Worth nailing down now, because the rest of the course leans on the
-distinction.
+Worth nailing down now, because the rest of the course leans on it.
 
 | | Talks to | Owns |
 |---|---|---|
 | **server** | whoever calls it | its own tools and data |
 | **client** | exactly one server | the transport |
-| **host** | the model, and *several* clients | the conversation, the loop, the money |
+| **host** | the model, and *several* clients | the conversation, the loop, and the money |
 
 Every AI product you admire — Claude Code, Cursor, ChatGPT with plugins — is a
 variation on that third row.
+
+<Diagram
+  caption="Project #1 built the green box and let Claude Desktop be the red one. Project #2 builds the red box, which is where all the decisions live."
+>
+{`flowchart LR
+    subgraph BUILT["✅ project #1 — the vending machine"]
+        SRV["🧰 MCP server<br/><i>waits. dispenses.</i>"]
+    end
+
+    subgraph THIS["🔁 project #2 — the brain"]
+        HOST["🎛️ The HOST<br/><i>reads intent, picks the tool,<br/>fills the arguments, reads the<br/>result, decides what's next,<br/>loops until done</i>"]
+    end
+
+    USER["🧑 you"] --> HOST
+    HOST -->|"tools/call"| SRV
+    SRV -->|"result"| HOST
+    HOST -->|"answer"| USER
+
+    style BUILT fill:#052e16,stroke:#4ade80,color:#dcfce7
+    style THIS fill:#450a0a,stroke:#ef4444,color:#fecaca
+    style HOST fill:#7f1d1d,stroke:#ef4444,stroke-width:3px,color:#fecaca
+    style SRV fill:#14532d,stroke:#4ade80,color:#dcfce7`}
+</Diagram>
 
 <Callout type="insight" title="And notice where the security boundary lands">
   The host is the only component that talks to the model, holds the API key,
   and decides which tools are even offered.
 
-  Servers propose. **The host disposes.** That sentence is the seed of projects
-  #3, #4 and #5 — it just takes three more projects to notice all its
+  **Servers propose. The host disposes.** That sentence is the seed of projects
+  #3, #4 and #5 — it just takes three more projects to notice all of its
   consequences.
 </Callout>
+
+## Part 4 · The state is an array, and that turns out to matter
+
+One more observation, easy to skip, that two later projects are built on.
+
+Look again at what the loop actually holds between iterations. It is
+`messages` — an array. That is the whole of the agent's state. There is no
+hidden memory, no session on Anthropic's side, no server-side conversation id.
+
+<Callout type="lesson" title="Which means an agent is a value, not a process">
+  You can serialise it. You can write it to a database, end the HTTP request,
+  and rebuild it on a different machine five minutes later.
+
+  [Project #3](/learn/gate/pausing-is-an-array) does exactly that to pause for
+  human approval, and [project #4](/learn/crew/five-agents-one-human) does it
+  to three agents at once. Neither needed a continuation library, because
+  freezing an array is an `INSERT`.
+</Callout>
+
+## What you now know
+
+- An agent is four steps: send, read the reply, run any tools, paste the
+  results back, repeat.
+- Tool results go back **in the `user` role**. There is no separate channel.
+- Branch on **every** `stop_reason`, not just `tool_use`.
+- Chaining works because the loop pastes output into the conversation — no
+  code connects one tool to the next.
+- A **host** owns the model conversation, the loop and the key; servers only
+  propose.
+- The agent's entire state is the `messages` array, which is why it can be
+  frozen.
+
+Next: the three rules that will save you, each of which cost real time to
+learn.

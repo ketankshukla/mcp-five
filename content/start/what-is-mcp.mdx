@@ -4,19 +4,24 @@ emoji: "🔌"
 summary: "A brain in a jar, a list taped to a toy box, and why 10 × 10 became 10 + 10."
 ---
 
-## An AI is a brain in a jar
+If you have never built anything with MCP, this is the page that has to land.
+Everything else in the course is built on it, so we are going to go slowly, and
+we are going to look at the actual bytes before the end.
 
-It is very smart, and it is completely stuck.
+## Part 1 · The problem, before any jargon
 
-It can *think* about your files. It can't *open* them. It can *talk* about
-rolling dice. It can't actually roll one — ask it for a random number and it
-will pick 7 far more often than chance allows, because it is pattern-matching,
-not rolling.
+An AI model is a **brain in a jar**. It is very smart, and it is completely
+stuck.
+
+It can *think* about your files. It cannot *open* them. It can *talk* about
+rolling dice. It cannot actually roll one — ask it for a random number and it
+will say 7 far more often than chance allows, because it is pattern-matching
+against text, not rolling anything.
 
 Your code is the opposite problem. It has hands and no idea what you want.
 
 <Diagram
-  caption="The AI knows a lot and has no hands. Your code can touch anything and knows nothing about you. Before MCP there was no agreed way across."
+  caption="The AI knows a lot and has no hands. Your code can touch anything and knows nothing about you. Before MCP there was no agreed way across the middle."
 >
 {`flowchart LR
     AI["🧠 <b>The AI</b><br/>✅ knows a lot<br/>❌ has no hands"]
@@ -31,9 +36,36 @@ Your code is the opposite problem. It has hands and no idea what you want.
     style GAP fill:#450a0a,stroke:#ef4444,stroke-width:2px,stroke-dasharray: 6 4,color:#fecaca`}
 </Diagram>
 
-## The fix is a list taped to a box
+### Why this is harder than "just call a function"
 
-Picture a toy box. The AI can't see inside it. So you tape a list to the
+The obvious thought is: fine, let the model call my function. But a language
+model does not execute anything. It produces **text**. That is the only thing
+it can do.
+
+So "the model called my function" always means, underneath:
+
+1. The model produced some text that *describes* a function call.
+2. **Your program** read that text, recognised it as a request, and ran the
+   function itself.
+3. **Your program** put the result back into the conversation as more text.
+4. The model read that text on its next turn.
+
+There is no step where the model reaches out and touches anything. Every
+integration is a loop of text going back and forth, with your code in the
+middle doing the actual work.
+
+<Callout type="lesson" title="Hold onto this, because it is the whole course">
+  The model never touches your server. It emits a request, **something else**
+  performs it, and the result comes back as text the model reads like any other
+  text.
+
+  That "something else" is the interesting part, and it is what you build in
+  [project #2](/learn/host/a-while-loop).
+</Callout>
+
+## Part 2 · The fix is a list taped to a box
+
+Picture a toy box. The AI cannot see inside it. So you tape a list to the
 outside:
 
 ```text
@@ -46,28 +78,36 @@ Inside this box:
 The AI reads the list, points at one, and says *"use that one, please, with
 these settings."* You reach in, use it, and hand back the result.
 
-**MCP is the agreed-upon shape of that message.** That is the whole thing. The
-rest is details.
+**MCP is the agreed-upon shape of those messages** — the shape of the list, and
+the shape of "use that one, please." That is the entire idea. Everything below
+is detail.
 
-<Callout type="lesson">
-  The AI never sees inside your box. It reads a list of what's in there,
-  picks one, and gets a result back. How the thing works — a database, an API,
-  a variable in memory — is entirely your business.
-</Callout>
+### What "protocol" actually means here
 
-## Why a *standard* is the load-bearing word
+It is worth being concrete, because "protocol" sounds grander than it is.
 
-"Protocol" sounds like the boring part. It is the entire value.
+A protocol is just **an agreement about the shape of messages** so two programs
+written by strangers can talk. HTTP is an agreement that a request starts with
+a method and a path. MCP is an agreement that:
 
-Before MCP, connecting 10 AI apps to 10 services meant writing **100** custom
-integrations — every app against every service, each one bespoke, each one
+- asking what's available is a message whose `method` is `"tools/list"`
+- using one is a message whose `method` is `"tools/call"`
+- a tool is described by a `name`, a `description`, and an `inputSchema`
+
+Nothing more mystical than that. There is no MCP daemon, no special port, no
+binary format. **It is JSON, usually over an ordinary HTTP POST.**
+
+## Part 3 · Why a standard was worth having
+
+Before MCP, connecting 10 AI apps to 10 services meant writing **100** bespoke
+integrations — every app against every service, each one hand-rolled, each one
 breaking on its own schedule.
 
 With MCP it is **10 + 10 = 20**. Each app learns MCP once. Each service speaks
 MCP once. Everything plugs into everything.
 
 <Diagram
-  caption="Without a standard, every app needs a bespoke integration for every service. With one, each side learns the protocol once. Three by three is nine versus six; ten by ten is a hundred versus twenty."
+  caption="Three apps and three services: nine bespoke integrations, or six standard ones. Scale it to ten and ten and it is a hundred versus twenty."
 >
 {`flowchart TB
     subgraph AFTER["✅ With MCP — 3 + 3 = 6 connections"]
@@ -100,31 +140,39 @@ MCP once. Everything plugs into everything.
     style HUB fill:#78350f,stroke:#fbbf24,color:#fef3c7`}
 </Diagram>
 
-It is USB-C for AI. One shape of plug.
+It is USB-C for AI. One shape of plug. The value is not that the plug is
+clever — it is that everybody agreed on it.
 
-## Three words you need, defined plainly
+## Part 4 · Three words, defined plainly
 
-These get used interchangeably everywhere and they are not interchangeable.
-The distinction is the spine of this whole course, because **projects #1 and
-#2 are these two things**, and everything after is a consequence.
+These three get used interchangeably everywhere, and they are not
+interchangeable. Getting them straight now will save you the entire course.
 
-| Word | What it is | In this course |
-|---|---|---|
-| **Server** | Offers tools. Waits. Never initiates. | Project #1 builds one |
-| **Client** | Speaks to exactly one server. | Hand-written, ~200 lines of `fetch` |
-| **Host** | Owns the conversation with the model, wrangles *several* servers, runs the loop. | Project #2 builds one |
+| Word | What it is | Analogy | Built in |
+|---|---|---|---|
+| **Server** | Offers tools. Waits. Never starts anything. | a vending machine | [project #1](/learn/server/vending-machine) |
+| **Client** | The piece that speaks to exactly one server. | the coin slot and keypad | [project #2](/learn/host/client-by-hand) |
+| **Host** | Owns the conversation with the model, wrangles *several* servers, runs the loop, holds the API key. | the person with the wallet, standing in front of a row of machines | [project #2](/learn/host/a-while-loop) |
 
-Every AI product you admire — Claude Code, Cursor, ChatGPT with plugins — is a
-variation on that third box.
+### Where you have already met these
+
+You have almost certainly used a host without calling it that.
+
+**Claude Desktop is a host.** When you add an MCP server to its config file and
+restart it, Claude Desktop connects a *client* to your *server*, fetches your
+tool list, and includes it in every message it sends to the model. When the
+model asks for a tool, Claude Desktop runs it and pastes the result back.
+
+Claude Code, Cursor, and every "AI app with plugins" are the same shape.
 
 <Diagram
-  title="D2 · where everything sits"
-  caption="The host is the only thing talking to the model. Servers offer tools and wait; a client speaks to one server; the host wrangles several and owns the loop. The model itself never touches a server."
+  title="Where everything sits"
+  caption="The host is the only thing talking to the model, and the only thing holding an API key. Servers offer tools and wait. Notice that the model is not connected to any server — it never reaches anything itself."
 >
-{`flowchart LR
-    USER["🧑 you"]
+{`flowchart TB
+    USER["🧑 you<br/><i>plain English</i>"]
 
-    subgraph HOSTBOX["🎛️ the HOST — your app"]
+    subgraph HOSTBOX["🎛️ the HOST — e.g. Claude Desktop, or your app"]
         direction TB
         LOOP["🔁 the loop<br/><i>decides what happens next</i>"]
         C1["🔌 client"]
@@ -133,11 +181,11 @@ variation on that third box.
         LOOP --- C2
     end
 
-    MODEL["🧠 the model<br/><i>picks tools, writes text.<br/>talks to nothing else.</i>"]
+    MODEL["🧠 the model<br/><i>reads text, writes text.<br/>touches nothing.</i>"]
     S1["🧰 server A<br/><i>🎲 dice, 🍪 jar</i>"]
     S2["🧰 server B<br/><i>🔐 cipher</i>"]
 
-    USER -->|"plain English"| LOOP
+    USER --> LOOP
     LOOP <-->|"messages + tool list"| MODEL
     C1 -->|"tools/call"| S1
     C2 -->|"tools/call"| S2
@@ -151,14 +199,19 @@ variation on that third box.
     style USER fill:#1e293b,stroke:#38bdf8,color:#f8fafc`}
 </Diagram>
 
-Notice what the model is *not* connected to. It never reaches a server. It
-reads a list and says which one it wants; the host does the reaching. That gap
-is where projects #3, #4 and #5 all live.
+<Callout type="insight" title="Look at what the model is NOT connected to">
+  It never reaches a server. It reads a list and says which one it wants; the
+  host does the reaching.
 
-## Six ordinary HTTP POSTs
+  That gap — between the model *asking* and the tool *running* — is where
+  projects #3, #4 and #5 all live. Project #3 stands a human in it. Project #5
+  puts a price check in it. Right now, in project #1, the gap is zero
+  milliseconds wide.
+</Callout>
 
-There is no magic in here. A whole MCP conversation is six messages carrying
-JSON.
+## Part 5 · A complete conversation, in six messages
+
+Here is the whole thing, end to end. Six ordinary HTTP POSTs carrying JSON.
 
 | # | What happens | The actual message |
 |---|---|---|
@@ -169,31 +222,235 @@ JSON.
 | 5 | **Your code runs.** On your server, with your data. | *(just JavaScript)* |
 | 6 | **The answer comes home.** | *(the response)* |
 
-And every one of them is wrapped in a boring envelope called JSON-RPC 2.0:
+Now let us actually look at the bytes, because this is the part most
+introductions skip and it is the part that makes MCP stop being mysterious.
+
+### Message 2 — asking what's available
+
+You send this:
 
 ```json
-{ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-  "params": { "name": "roll_dice", "arguments": { "sides": 20, "times": 3 } } }
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }
 ```
 
-That's it. That's the protocol you were nervous about.
+Four fields, and three of them are boilerplate:
 
-## What a server can offer
+| Field | What it is for |
+|---|---|
+| `jsonrpc` | Always `"2.0"`. It says which envelope format this is. |
+| `id` | Any number you choose. The reply comes back carrying the same `id`, so you can match replies to requests when several are in flight. |
+| `method` | **The only interesting field.** What you are asking for. |
+| `params` | Arguments for the method. Omitted here, because "what have you got?" needs none. |
 
-Almost everybody only ever builds **tools**. There are five capabilities, and
-the other four matter because they answer a question tools can't: *who gets to
-decide?*
+That envelope — `jsonrpc`, `id`, `method`, `params` — is **JSON-RPC 2.0**, and
+it is the entire wire format. It predates MCP by fifteen years and MCP just
+uses it.
 
-| Capability | What it is | Who decides |
-|---|---|---|
-| 🔧 **tools** | A verb. Something to **do**. | the **model** |
-| 📄 **resources** | A noun. Something to **read**, addressed by URI. | the **host** |
-| 💬 **prompts** | A saved fill-in-the-blank instruction. | the **human** |
-| 🧠 **sampling** | The server asks **your host** to run a model call. | the **server** asks; the host decides |
-| 🙋 **elicitation** | The server asks **your user** a question. | the **server** asks; the user answers |
+### And the server answers
 
-<Callout type="insight" title="A number worth carrying into the next four sections">
-  Four projects into a series named after this protocol, **only `tools` had
-  ever been used.** The other four all arrive at once, in project #5. The
-  reason that is interesting is on the next page.
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tools": [
+      {
+        "name": "roll_dice",
+        "description": "Roll one or more dice and return the individual results and their total. Use this whenever real randomness is needed — the model cannot generate random numbers itself.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sides": { "type": "integer", "minimum": 2, "maximum": 1000, "default": 6 },
+            "times": { "type": "integer", "minimum": 1, "maximum": 20, "default": 1 }
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+Same `id`, so you know which question this answers. And a `result` containing
+one tool.
+
+Read what a "tool" actually is, because it is less than you might expect:
+
+- a **name** — an identifier
+- a **description** — a paragraph of English
+- an **inputSchema** — JSON Schema describing the arguments
+
+That is all. **There is no code in a tool definition.** The implementation
+lives on the server and is never shown to anybody. The model only ever sees
+these three things.
+
+<Callout type="lesson" title="Which makes the description load-bearing">
+  When the model is choosing between eleven tools, it is reading eleven
+  paragraphs of English and picking one. Not the name — the description.
+
+  A vague description is not a documentation problem, it is a **functional**
+  one: your tool silently never gets called and nothing anywhere reports an
+  error. More on this in [Anatomy of a
+  tool](/learn/server/anatomy-of-a-tool).
 </Callout>
+
+### Message 4 — using one
+
+The host takes that tool list, hands it to the model along with your sentence
+*"roll me three twenty-sided dice"*, and the model replies with a request to
+use `roll_dice` with `sides: 20, times: 3`.
+
+The host turns that into:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "roll_dice",
+    "arguments": { "sides": 20, "times": 3 }
+  }
+}
+```
+
+Your server runs your JavaScript and answers:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "content": [
+      { "type": "text", "text": "Rolled 3d20 -> [17, 9, 18]  Total: 44" }
+    ]
+  }
+}
+```
+
+<Callout type="insight" title="Notice that the answer is a SENTENCE, not data">
+  Not `{ "rolls": [17,9,18], "total": 44 }` — a line of English.
+
+  That is deliberate and it is why the whole thing works so smoothly. The model
+  reads that string the same way it reads anything else, which is how it can
+  take `Total: 44` out of one tool's output and put `44` into the next tool's
+  input without a single line of code connecting the two. You will watch that
+  happen in [project #2](/learn/host/a-while-loop).
+</Callout>
+
+### The same thing, as a picture
+
+<Diagram
+  title="The whole protocol"
+  caption="The blue band happens once, when the host connects. The amber band is the part you notice. Between them the server is simply waiting — it will wait indefinitely, because a server never initiates anything."
+>
+{`sequenceDiagram
+    autonumber
+    actor You as 🧑 You
+    participant AI as 🧠 Claude
+    participant SRV as 🧰 Your MCP server
+
+    rect rgba(56, 189, 248, 0.15)
+        Note over AI,SRV: Handshake — happens once, when Claude starts
+        AI->>SRV: initialize
+        SRV-->>AI: "I speak MCP, I'm cookie-jar-mcp"
+        AI->>SRV: tools/list
+        SRV-->>AI: say_hello, roll_dice, cookie_jar, secret_code<br/>+ each one's description and inputs
+    end
+
+    rect rgba(251, 191, 36, 0.15)
+        Note over You,SRV: Now you actually ask for something
+        You->>AI: "roll me three twenty-sided dice"
+        Note right of AI: Reads your sentence.<br/>Matches it against the<br/>DESCRIPTIONS from step 4.
+        AI->>SRV: tools/call<br/>roll_dice { sides: 20, times: 3 }
+        Note right of SRV: YOUR JavaScript runs here.<br/>Claude never sees inside.
+        SRV-->>AI: "Rolled 3d20 -> [17, 9, 18] Total: 44"
+        AI-->>You: "You rolled 17, 9 and 18 — 44 total!"
+    end`}
+</Diagram>
+
+## Part 6 · Try it right now
+
+Project #1's server is deployed and open. You do not need to install anything,
+sign up for anything, or hold an API key — a server costs nothing to run and
+nothing to call.
+
+```bash
+curl -X POST https://learn-mcp-5-year-old.vercel.app/api/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+<Checkpoint>
+  You get back a JSON blob listing four tools with their descriptions and input
+  schemas. **That is a real MCP conversation, and you just had one with
+  `curl`.**
+
+  If you got a `406`, see the callout below — it is the single most common
+  first-contact error.
+</Checkpoint>
+
+And to actually run one:
+
+```bash
+curl -X POST https://learn-mcp-5-year-old.vercel.app/api/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
+       "params":{"name":"roll_dice","arguments":{"sides":20,"times":3}}}'
+```
+
+<Callout type="gotcha" title="Accept must list BOTH content types">
+  `application/json` **and** `text/event-stream`. Send only the first and you
+  get a bare `406 Not Acceptable` with nothing useful in the body.
+
+  The reason: the spec requires a client to declare it can handle *either* a
+  plain JSON reply or a Server-Sent Events stream, because the server is
+  allowed to choose. `curl` and `fetch` do not add this header for you.
+
+  This one bites everybody exactly once, and it bites again in [project
+  #2](/learn/host/client-by-hand) when the client is written by hand.
+</Callout>
+
+## Part 7 · What a server can offer
+
+Almost everybody only ever builds **tools**. There are five capabilities in
+total, and the other four matter because they answer a question tools cannot:
+*who gets to decide?*
+
+| Capability | What it is | Who pulls the trigger |
+|---|---|---|
+| 🔧 **tools** | A verb. Something to **do**. | the **model** decides |
+| 📄 **resources** | A noun. Something to **read**, addressed by URI. | the **host** decides |
+| 💬 **prompts** | A saved fill-in-the-blank instruction. | the **human** decides |
+| 🧠 **sampling** | The server asks **your host** to run a model call. | the **server** asks |
+| 🙋 **elicitation** | The server asks **your user** a question. | the **server** asks |
+
+The [next page](/learn/start/five-capabilities) takes each of these apart. For
+now, one number is worth carrying:
+
+<Callout type="insight" title="Four projects in, only `tools` had ever been used">
+  Not because the others are obscure — because every tutorial in the ecosystem
+  concentrates on tools, so the other four are effectively invisible.
+
+  All four arrive at once in [project #5](/learn/ledger/four-unused), and one
+  of them turns out to be able to spend your money.
+</Callout>
+
+## What you now know
+
+Before moving on, you should be able to say all of these without looking:
+
+- A model produces text and touches nothing; **your program** performs the
+  actions.
+- MCP is an agreement about the shape of JSON messages, carried over ordinary
+  HTTP POSTs.
+- The envelope is JSON-RPC 2.0: `jsonrpc`, `id`, `method`, `params`.
+- Three messages do almost everything: `initialize`, `tools/list`,
+  `tools/call`.
+- A tool is a **name**, a **description** and an **inputSchema** — no code.
+- The **description** is what the model reads when choosing.
+- A **server** offers and waits; a **client** talks to one server; a **host**
+  owns the model conversation, the loop and the money.
+
+Next: the five capabilities, sorted by who pulls the trigger.

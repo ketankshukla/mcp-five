@@ -5,7 +5,8 @@ summary: "Name, description, schema, function — and why the description is the
 project: 1
 ---
 
-Every tool needs exactly four things.
+Every tool needs exactly four things. Three of them are obvious. One of them is
+the whole job, and it is the one that looks like documentation.
 
 ```ts title="app/api/mcp/route.ts"
 server.registerTool(
@@ -23,41 +24,83 @@ server.registerTool(
 );
 ```
 
-Three of those are obvious. One of them is the whole job.
+Let us take them one at a time.
 
-## The description is the whole ballgame
+## 1 · The name
+
+An identifier. It must match `^[a-zA-Z0-9_-]{1,128}$` — no dots, no slashes,
+no colons — because that is what the Claude API accepts for a tool name.
+
+It is mostly *not* how the model chooses. It matters for two other reasons:
+
+**It is how the host routes the call back to the right server.** Which becomes
+interesting the moment you connect two servers that both have a `secret_code`
+tool — see [One shelf, many servers](/learn/host/the-toolbox).
+
+**It is what your gate rules key on.** Project #3's approval list is written
+against names like `cookiejar__smash_jar`.
+
+## 2 · The description — the whole ballgame
 
 <Callout type="quote">
   The description is the only thing the model reads when deciding whether to
   use your tool.
 </Callout>
 
-Not the name. Not the schema. Not your code, which it never sees. When the
-model is choosing among eleven tools, it is reading eleven paragraphs of
-English and picking one.
+Not the name. Not the schema. Not your code, which it never sees.
 
-Which means a vague description is not a documentation problem. It is a
-**functional** one — your tool silently never gets called, and nothing anywhere
-reports an error. The agent just does something else, or apologises that it
-can't help.
+When the model is choosing among eleven tools, it is reading eleven paragraphs
+of English and picking one. That is the entire selection mechanism.
+
+### Which means a vague description is a functional bug
+
+And a particularly nasty one, because **nothing reports an error**. Your tool
+simply never gets called. The agent does something else, or apologises that it
+cannot help, and every log is green.
+
+Compare these two:
+
+<Compare
+  leftLabel="Written like a variable name"
+  rightLabel="Written like a job posting"
+  left={<><p><code>&quot;Rolls dice.&quot;</code></p><p>Technically accurate. Tells the model nothing about <em>when</em> to reach for it, what it is good for, or what it should not be used for.</p></>}
+  right={<><p><code>&quot;Roll one or more dice and return the individual results and their total. Use this whenever real randomness is needed — the model cannot generate random numbers itself.&quot;</code></p><p>Says what it does, when to use it, and <strong>why you cannot fake it</strong>.</p></>}
+/>
+
+That last clause is doing real work. It tells the model something true about
+its own limitations, which makes it far more likely to reach for the tool
+instead of inventing a number.
 
 <Callout type="lesson" title="Write it like a job posting, not a variable name">
-  A variable name says what a thing *is*. A job posting says what it is *for*,
-  when you'd want it, and what it isn't. That second one is what the model is
-  trying to answer.
+  A variable name says what a thing **is**. A job posting says what it is
+  **for**, when you would want it, and what it is not.
 
-  This is the highest-leverage line in the project, and it is a sentence of
-  prose in the middle of a config object, which is exactly why people skim past
-  it.
+  That second one is the question the model is actually trying to answer, and
+  it is a paragraph of prose sitting in the middle of a config object — which
+  is exactly why people skim past it.
 </Callout>
 
-## The schema is a free bouncer
+### A checklist for a good description
 
-`inputSchema` is a Zod object, which the SDK converts to JSON Schema and ships
-in `tools/list`. It does two jobs at once, and the second is the good one.
+- What does it do, in one plain sentence?
+- **When** should it be used? Give the trigger.
+- When should it *not* be used? Name the neighbouring tool if there is one.
+- Are there consequences worth stating? *"Permanently deletes…"*, *"costs
+  money"*, *"cannot be undone."*
+- What does it return? *"…and their total"* saves a follow-up call.
 
-It tells the model what shape to send. **And it rejects bad arguments before
-your code runs**, with a message the model can read and correct:
+## 3 · The schema is a free bouncer
+
+`inputSchema` is a Zod object. The SDK converts it to JSON Schema and ships
+that in `tools/list`, so the model can see the shape it must produce.
+
+It does two jobs, and the second is the good one.
+
+**It tells the model what to send.** Types, which fields are required, which
+have defaults.
+
+**It rejects bad arguments before your code runs**, with a message the model
+can read and correct:
 
 <Terminal>
 {`Input validation error: Invalid arguments for tool roll_dice:
@@ -65,10 +108,13 @@ sides: Too small: expected number to be >=2`}
 </Terminal>
 
 You did not write a line of validation code. You described the shape honestly
-and got the check for free.
+and got the check for free — and, crucially, the model gets an error it can act
+on rather than a stack trace.
+
+### Where each check happens
 
 <Diagram
-  title="where the checks sit"
+  title="The path of one tools/call"
   caption="Two of the three refusals are free — you get them from z.object(). The amber one is the only one you write, and writing it well is what separates a tool that helps from a tool that confuses."
 >
 {`flowchart TB
@@ -99,22 +145,89 @@ and got the check for free.
     style RUN fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe`}
 </Diagram>
 
-### Refuse politely, don't crash
+Three things worth noticing in that flow:
 
-That amber box matters more than it looks. When your own rules say no — there
-aren't 500 cookies in the jar — **return a sentence, not an exception**.
+**Defaults are applied before your function runs.** `times` is optional with
+`.default(1)`, so your handler always receives a number and never has to write
+`times ?? 1`.
 
-A polite refusal in plain English goes back into the conversation and the model
-adapts: it explains, or proposes something else, or asks you a question. A
-thrown error is noise the model has to guess about.
+**Constraints double as documentation.** `.max(20)` stops a runaway, and it
+also appears in the JSON Schema the model reads, so the model knows not to ask
+for a thousand dice in the first place.
 
-You will see this pay off in [project #3's demo](/learn/gate/the-deny-branch),
-where the server refuses to eat 500 cookies and the agent recovers gracefully
-without anybody writing recovery logic.
+**The two red boxes cost you nothing.** They come from `z.object({...})`.
+
+## 4 · The function, and what it returns
+
+```ts
+async ({ sides, times }) => {
+  const rolls = Array.from({ length: times }, () => 1 + Math.floor(Math.random() * sides));
+  const total = rolls.reduce((a, b) => a + b, 0);
+  return {
+    content: [{ type: "text", text: `Rolled ${times}d${sides} -> [${rolls}]  Total: ${total}` }],
+  };
+}
+```
+
+A tool returns **content blocks**, and for most tools that is one block of
+text.
+
+Note that this is a **sentence**, not JSON. That is deliberate.
+
+<Callout type="insight" title="Why plain text, and not structured data">
+  Because the model reads it the way it reads anything else — which is how the
+  loop in project #2 can take <code>Total: 44</code> out of one tool&apos;s
+  output and put <code>44</code> into the next tool&apos;s input with no code
+  connecting the two.
+
+  If you want real structure, add an <code>outputSchema</code> and return
+  <code>structuredContent</code>. Project #1 deliberately does not, because
+  plain text makes the mechanism visible.
+</Callout>
+
+### Refuse politely. Do not throw.
+
+That amber box in the diagram matters more than it looks.
+
+When your own rules say no — there aren't 500 cookies in the jar — **return a
+sentence, not an exception**.
+
+```ts
+if (count > cookiesInJar) {
+  return { content: [{ type: "text",
+    text: `Can't eat ${count} -- there are only ${cookiesInJar} cookie(s) in the jar. Nice try.` }] };
+}
+```
+
+Here is what that buys you, verbatim from a real run:
+
+<Terminal>
+{`  -> WANTS cookiejar__cookie_jar  {"action":"eat","count":500}
+     <- RAN  Can't eat 500 -- there are only 78 cookie(s) in the jar. Nice try.
+
+  ANSWER: Looks like the jar only has 78 cookies in it right now, so I can't
+  eat 500 — that would leave it in cookie-debt! Would you like me to eat all
+  78 instead, or a smaller amount?`}
+</Terminal>
+
+Nobody wrote that recovery. The model read a clear sentence, understood the
+situation, and offered an alternative.
+
+<Callout type="lesson" title="An error string is not diagnostics — it is a prompt">
+  The model has no channel for out-of-band information. **Everything** it knows
+  about what just happened arrives as text in the conversation.
+
+  So write failure messages for the reader they actually have. This becomes a
+  load-bearing lesson twice more: in [the deny
+  branch](/learn/gate/the-deny-branch), where a badly-worded refusal makes the
+  model retry forever, and in [the spend
+  gate](/learn/ledger/gate-cannot-pause), where the same mistake costs a full
+  round trip each time.
+</Callout>
 
 ## Annotations, and a warning to carry forward
 
-MCP lets a server describe its own tools:
+MCP lets a server describe its own tools as dangerous:
 
 ```ts
 server.registerTool("smash_jar", {
@@ -130,28 +243,54 @@ destructive tool.
   Not as a hint. Not as a default. Not as a tiebreaker.
 
   It is a genuinely useful signal — for a human skimming a tool list, or a UI
-  picking an icon. It is not a permission model, because it arrives over HTTP
-  from a machine you do not control, set by whoever wrote that server.
+  picking an icon. It is **not** a permission model, because it arrives over
+  HTTP from a machine you do not control, set by whoever wrote that server.
 
-  The full argument, and why every softer version of the idea dies the same
-  way, is [A hint is not a permission
-  model](/learn/gate/hint-not-permission). It is the most important page in
-  this course.
+  If your gate consults it, any server that wants to bypass your gate bypasses
+  your gate: it just ships `destructiveHint: false`.
+
+  The full argument is [A hint is not a permission
+  model](/learn/gate/hint-not-permission), and it is the most important page
+  in this course.
 </Callout>
 
-## What comes back
+## Adding your own tool
 
-A tool returns content blocks, and for most tools that is one block of text:
+The genuinely nice thing about this design: copy an existing block, rename it,
+change the description.
 
 ```ts
-return { content: [{ type: "text", text: "Rolled 3d20 -> [17, 9, 18]  Total: 44" }] };
+server.registerTool(
+  "shout",
+  {
+    description:
+      "Convert a sentence to upper case with an exclamation mark. Use when the user asks for something to be shouted or emphasised.",
+    inputSchema: z.object({ text: z.string().min(1).max(200) }),
+  },
+  async ({ text }) => ({ content: [{ type: "text", text: `${text.toUpperCase()}!` }] }),
+);
 ```
 
-Note that this is a **sentence**, not JSON. The model reads it the way it reads
-anything else, which is why the loop in project #2 can take *"Total: 44"* out of
-one tool's output and put `44` into the next tool's input without a single line
-of code connecting the two.
+Push it. That is all.
 
-If you want structured data instead, add an `outputSchema` and return
-`structuredContent`. Project #1 deliberately doesn't, because the plain-text
-version makes the mechanism visible.
+<Checkpoint>
+  You do **not** tell the model about the new tool. On its next `tools/list` it
+  picks the tool up, reads your description, and starts using it when your
+  description convinces it to.
+
+  That is the payoff of the protocol: adding a capability is a deploy, not an
+  integration.
+</Checkpoint>
+
+## What you now know
+
+- A tool is **name, description, inputSchema, function** — and no code is ever
+  shown to the model.
+- The **description** is the entire selection mechanism. Write it like a job
+  posting.
+- The **schema** validates for free, applies defaults before your handler runs,
+  and doubles as documentation the model reads.
+- Return a **sentence**, and refuse politely rather than throwing — an error
+  string is a prompt.
+- `annotations` are a hint for humans and UIs, and must never be an input to a
+  permission decision.
